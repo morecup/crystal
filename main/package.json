@@ -8,7 +8,7 @@
     "dev": "tsc -w",
     "build": "rimraf dist && tsc && npm run copy:assets && npm run bundle:mcp",
     "bundle:mcp": "node build-mcp-bridge.js",
-    "copy:assets": "mkdirp dist/main/src/database/migrations && cp src/database/*.sql dist/main/src/database/ && cp src/database/migrations/*.sql dist/main/src/database/migrations/",
+    "copy:assets": "node scripts/copy-assets.cjs",
     "lint": "eslint src --ext .ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest",
