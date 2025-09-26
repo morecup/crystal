@@ -403,6 +403,7 @@ export class ClaudeCodeManager extends AbstractCliManager {
           // First attempt: normal spawn
           ptyProcess = pty.spawn(command, args, {
             name: 'xterm-color',
+            useConpty: false,
             cols: 80,
             rows: 30,
             cwd,
@@ -426,6 +427,7 @@ export class ClaudeCodeManager extends AbstractCliManager {
           const nodeArgs = ['--no-warnings', '--enable-source-maps', claudeScript, ...args];
           ptyProcess = pty.spawn(nodePath, nodeArgs, {
             name: 'xterm-color',
+            useConpty: false,
             cols: 80,
             rows: 30,
             cwd,
