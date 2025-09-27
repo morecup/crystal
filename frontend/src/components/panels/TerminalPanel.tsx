@@ -1,4 +1,4 @@
-﻿import React, { useRef, useEffect, useState } from 'react';
+import React, { useRef, useEffect, useState } from 'react';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { useSession } from '../../contexts/SessionContext';
@@ -89,7 +89,9 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({ panel, isActive })
           navigator.clipboard.readText()
               .then(text => {
                 if (!text) return;
-                terminal?.paste(text);
+                // 使用 write 方法代替 paste 方法，避免在WSL中自动选中文本
+                // write 方法直接将文本写入终端，不会触发选择行为
+                terminal?.write(text);
               })
               .catch(() => {});
           return false;
