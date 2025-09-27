@@ -1,4 +1,4 @@
-import React, { useRef, useEffect, useState } from 'react';
+﻿import React, { useRef, useEffect, useState } from 'react';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { useSession } from '../../contexts/SessionContext';
@@ -77,7 +77,24 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({ panel, isActive })
         fitAddon = new FitAddon();
         terminal.loadAddon(fitAddon);
         console.log('[TerminalPanel] FitAddon loaded');
-        
+
+
+        terminal.attachCustomKeyEventHandler((ev: KeyboardEvent) => {
+          const isCtrlV = (ev.ctrlKey || ev.metaKey) && (ev.code === 'KeyV' || (ev.key.toLowerCase() === 'v'));
+          if (!isCtrlV) return true;
+
+          if (ev.type !== 'keydown') return false;
+
+          ev.preventDefault();
+          navigator.clipboard.readText()
+              .then(text => {
+                if (!text) return;
+                terminal?.paste(text);
+              })
+              .catch(() => {});
+          return false;
+        });
+
         // FIX: Additional check before DOM manipulation
         if (terminalRef.current && !disposed) {
           console.log('[TerminalPanel] Opening terminal in DOM element:', terminalRef.current);
