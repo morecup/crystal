@@ -14,6 +14,7 @@ interface ShellInfo {
  */
 export class ShellDetector {
   private static cachedShell: ShellInfo | null = null;
+  private static cachedWslShell: ShellInfo | null = null;
 
   /**
    * Get the user's default shell
@@ -38,6 +39,42 @@ export class ShellDetector {
     } else {
       return this.detectUnixShell();
     }
+  }
+
+  /**
+   * Get WSL shell launcher (wsl.exe) on Windows.
+   * Falls back to default shell on non-Windows.
+   */
+  static getWSLShell(forceRefresh = false): ShellInfo {
+    if (process.platform !== 'win32') {
+      return this.getDefaultShell(forceRefresh);
+    }
+
+    if (!forceRefresh && this.cachedWslShell) {
+      return this.cachedWslShell;
+    }
+
+    // Try to locate wsl.exe
+    const candidateNames = ['wsl.exe', 'wsl'];
+    for (const name of candidateNames) {
+      const exe = this.findExecutable(name);
+      if (exe) {
+        this.cachedWslShell = { path: exe, name: 'wsl' };
+        return this.cachedWslShell;
+      }
+    }
+
+    // Common Windows System32 path
+    const sysRoot = process.env.SYSTEMROOT || 'C:\\\Windows';
+    const sysWsl = path.join(sysRoot, 'System32', 'wsl.exe');
+    if (fs.existsSync(sysWsl)) {
+      this.cachedWslShell = { path: sysWsl, name: 'wsl' };
+      return this.cachedWslShell;
+    }
+
+    // Last resort: rely on PATH resolution at spawn time
+    this.cachedWslShell = { path: 'wsl.exe', name: 'wsl' };
+    return this.cachedWslShell;
   }
 
   private static detectWindowsShell(): ShellInfo {

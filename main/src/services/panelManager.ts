@@ -312,7 +312,9 @@ export class PanelManager {
     const nextNumber = samePType.length + 1;
     
     // Capitalize first letter of type
-    const capitalizedType = type.charAt(0).toUpperCase() + type.slice(1);
+    const capitalizedType = type === 'wsl'
+      ? 'WSL'
+      : type.charAt(0).toUpperCase() + type.slice(1);
     
     return `${capitalizedType} ${nextNumber}`;
   }

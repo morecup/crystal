@@ -7,7 +7,7 @@ export interface ToolPanel {
   metadata: ToolPanelMetadata;   // Creation time, position, etc.
 }
 
-export type ToolPanelType = 'terminal' | 'claude' | 'codex' | 'diff' | 'editor' | 'logs' | 'dashboard'; // Will expand later
+export type ToolPanelType = 'terminal' | 'wsl' | 'claude' | 'codex' | 'diff' | 'editor' | 'logs' | 'dashboard'; // Will expand later
 
 export interface ToolPanelState {
   isActive: boolean;
@@ -218,6 +218,14 @@ export const PANEL_CAPABILITIES: Record<ToolPanelType, PanelCapabilities> = {
     singleton: false,
     canAppearInProjects: true,       // Terminal can appear in projects
     canAppearInWorktrees: true       // Terminal can appear in worktrees
+  },
+  wsl: {
+    canEmit: ['terminal:command_executed', 'terminal:exit', 'files:changed'],
+    canConsume: [], // WSL terminal doesn't consume events in Phase 1-2
+    requiresProcess: true,
+    singleton: false,
+    canAppearInProjects: true,
+    canAppearInWorktrees: true
   },
   claude: {
     canEmit: ['files:changed'], // Claude can change files through tool calls

@@ -140,6 +140,7 @@ export const PanelTabBar: React.FC<PanelTabBarProps> = memo(({
   const getPanelIcon = (type: ToolPanelType) => {
     switch (type) {
       case 'terminal':
+      case 'wsl':
         return <Terminal className="w-4 h-4" />;
       case 'claude':
         return <MessageSquare className="w-4 h-4" />;
@@ -156,6 +157,15 @@ export const PanelTabBar: React.FC<PanelTabBarProps> = memo(({
       // Add more icons as panel types are added
       default:
         return null;
+    }
+  };
+
+  const getPanelLabel = (type: ToolPanelType): string => {
+    switch (type) {
+      case 'wsl':
+        return 'WSL';
+      default:
+        return type.charAt(0).toUpperCase() + type.slice(1);
     }
   };
 
@@ -241,7 +251,7 @@ export const PanelTabBar: React.FC<PanelTabBarProps> = memo(({
                   onClick={() => handleAddPanel(type)}
                 >
                   {getPanelIcon(type)}
-                  <span className="ml-2 capitalize">{type}</span>
+                  <span className="ml-2">{getPanelLabel(type)}</span>
                 </button>
               ))}
             </div>

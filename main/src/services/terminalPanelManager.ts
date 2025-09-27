@@ -29,9 +29,11 @@ export class TerminalPanelManager {
     
     console.log(`[TerminalPanelManager] Initializing terminal ${panel.id} in ${cwd}`);
     
-    // Determine shell based on platform using the detector from the legacy terminal manager
-    const shellInfo = ShellDetector.getDefaultShell();
-    console.log(`[TerminalPanelManager] Using shell ${shellInfo.path} (${shellInfo.name})`);
+    // Determine shell based on panel type
+    const shellInfo = panel.type === 'wsl'
+      ? ShellDetector.getWSLShell()
+      : ShellDetector.getDefaultShell();
+    console.log(`[TerminalPanelManager] Using shell ${shellInfo.path} (${shellInfo.name}) for panel type ${panel.type}`);
 
     const isLinux = process.platform === 'linux';
     const enhancedPath = isLinux ? (process.env.PATH || '') : getShellPath();

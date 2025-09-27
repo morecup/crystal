@@ -49,6 +49,7 @@ export const PanelContainer: React.FC<PanelContainerProps> = ({
     // Non-CLI panel types use direct components
     switch (panel.type) {
       case 'terminal':
+      case 'wsl':
         return <TerminalPanel panel={panel} isActive={isActive} />;
       case 'diff':
         return <DiffPanel panel={panel} isActive={isActive} sessionId={panel.sessionId} isMainRepo={isMainRepo} />;

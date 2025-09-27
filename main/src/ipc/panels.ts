@@ -77,7 +77,7 @@ export function registerPanelHandlers(ipcMain: IpcMain, services: AppServices) {
         console.warn('[Panels IPC] Failed to unregister Codex panel during delete:', err);
       }
     }
-    if (panel?.type === 'terminal') {
+    if (panel?.type === 'terminal' || panel?.type === 'wsl') {
       terminalPanelManager.destroyTerminal(panelId);
     }
     
@@ -132,7 +132,7 @@ export function registerPanelHandlers(ipcMain: IpcMain, services: AppServices) {
     }
     
     // Initialize based on panel type
-    if (panel.type === 'terminal') {
+    if (panel.type === 'terminal' || panel.type === 'wsl') {
       const cwd = options?.cwd || process.cwd();
       await terminalPanelManager.initializeTerminal(panel, cwd);
     }
@@ -144,7 +144,7 @@ export function registerPanelHandlers(ipcMain: IpcMain, services: AppServices) {
     const panel = panelManager.getPanel(panelId);
     if (!panel) return false;
     
-    if (panel.type === 'terminal') {
+    if (panel.type === 'terminal' || panel.type === 'wsl') {
       return terminalPanelManager.isTerminalInitialized(panelId);
     }
     
