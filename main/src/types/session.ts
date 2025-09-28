@@ -59,6 +59,8 @@ export interface CreateSessionRequest {
   permissionMode?: 'approve' | 'ignore';
   projectId?: number;
   baseBranch?: string;
+  branchSelection?: 'new' | 'existing';
+  branchName?: string;
   autoCommit?: boolean;
   model?: string;
   toolType?: 'claude' | 'codex' | 'none';

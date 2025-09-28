@@ -164,6 +164,8 @@ export function registerSessionHandlers(ipcMain: IpcMain, services: AppServices)
           request.permissionMode,
           targetProject.id,
           request.baseBranch,
+          (request as any).branchSelection,
+          (request as any).branchName,
           request.autoCommit,
           request.toolType,
           request.commitMode,
@@ -183,6 +185,8 @@ export function registerSessionHandlers(ipcMain: IpcMain, services: AppServices)
           permissionMode: request.permissionMode,
           projectId: targetProject.id,
           baseBranch: request.baseBranch,
+          branchSelection: (request as any).branchSelection,
+          branchName: (request as any).branchName,
           autoCommit: request.autoCommit,
           toolType: request.toolType,
           commitMode: request.commitMode,
@@ -277,7 +281,11 @@ export function registerSessionHandlers(ipcMain: IpcMain, services: AppServices)
                 archiveProgressManager.updateTaskStatus(sessionId, 'removing-worktree');
               }
               
-              await worktreeManager.removeWorktree(project.path, dbSession.worktree_name, project.worktree_folder);
+              if (dbSession.worktree_path) {
+                await worktreeManager.removeWorktreeByPath(project.path, dbSession.worktree_path);
+              } else {
+                await worktreeManager.removeWorktree(project.path, dbSession.worktree_name, project.worktree_folder);
+              }
               
               console.log(`[Main] Successfully removed worktree ${dbSession.worktree_name}`);
               cleanupMessage += `\x1b[32m✓ Worktree removed successfully\x1b[0m\r\n`;

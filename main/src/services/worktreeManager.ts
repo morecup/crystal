@@ -45,6 +45,21 @@ export class WorktreeManager {
     return this.projectsCache.get(cacheKey)!;
   }
 
+  /**
+   * Find an existing worktree directory for a given branch.
+   * Returns absolute path if found, otherwise null.
+   */
+  async findWorktreeByBranch(projectPath: string, branch: string): Promise<string | null> {
+    try {
+      const worktrees = await this.listWorktrees(projectPath);
+      const match = worktrees.find(w => w.branch === branch);
+      return match ? match.path : null;
+    } catch (error) {
+      console.error('[WorktreeManager] findWorktreeByBranch failed:', error);
+      return null;
+    }
+  }
+
   async initializeProject(projectPath: string, worktreeFolder?: string): Promise<void> {
     const { baseDir } = this.getProjectPaths(projectPath, worktreeFolder);
     try {
@@ -196,6 +211,42 @@ export class WorktreeManager {
         if (existsSync(worktreePath)) {
           await rm(worktreePath, { recursive: true, force: true });
           // Double-check removal
+          if (existsSync(worktreePath)) {
+            throw new Error(`Residual worktree directory remains: ${worktreePath}`);
+          }
+          console.log(`[WorktreeManager] Physically removed worktree directory: ${worktreePath}`);
+        }
+      } catch (fsErr: any) {
+        console.error(`[WorktreeManager] Failed to remove worktree directory ${worktreePath}:`, fsErr);
+        throw new Error(`Failed to remove worktree directory: ${fsErr?.message || String(fsErr)}`);
+      }
+    });
+  }
+
+  /**
+   * Remove a worktree by its absolute path. Safe for worktrees outside the configured folder.
+   */
+  async removeWorktreeByPath(projectPath: string, worktreePath: string): Promise<void> {
+    return await withLock(`worktree-remove-${projectPath}-${worktreePath}`, async () => {
+      try {
+        await execWithShellPath(`git worktree remove "${worktreePath}" --force`, { cwd: projectPath });
+      } catch (error: any) {
+        const errorMessage = error.stderr || error.stdout || error.message || String(error);
+        if (
+          !(errorMessage.includes('is not a working tree') ||
+            errorMessage.includes('does not exist') ||
+            errorMessage.includes('No such file or directory'))
+        ) {
+          console.warn(`[WorktreeManager] git worktree remove warning: ${errorMessage}`);
+        } else {
+          console.log(`Worktree ${worktreePath} already removed or doesn't exist via git, continuing to filesystem cleanup...`);
+        }
+      }
+
+      // Ensure the worktree directory itself is removed if it still exists (Windows often leaves empty dirs)
+      try {
+        if (existsSync(worktreePath)) {
+          await rm(worktreePath, { recursive: true, force: true });
           if (existsSync(worktreePath)) {
             throw new Error(`Residual worktree directory remains: ${worktreePath}`);
           }

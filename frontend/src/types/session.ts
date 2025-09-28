@@ -59,6 +59,8 @@ export interface CreateSessionRequest {
   projectId?: number;
   isMainRepo?: boolean;
   baseBranch?: string;
+  branchSelection?: 'new' | 'existing';
+  branchName?: string;
   autoCommit?: boolean;
   toolType?: 'claude' | 'codex' | 'none';
   commitMode?: 'structured' | 'checkpoint' | 'disabled';

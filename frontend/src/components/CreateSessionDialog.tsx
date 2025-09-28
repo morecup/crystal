@@ -71,6 +71,9 @@ interface CreateSessionDialogProps {
 export function CreateSessionDialog({ isOpen, onClose, projectName, projectId }: CreateSessionDialogProps) {
   const [sessionName, setSessionName] = useState<string>('');
   const [sessionCount, setSessionCount] = useState<number>(1);
+  const previousNameRef = useRef<string>('');
+  const [branchSelection, setBranchSelection] = useState<'new' | 'existing'>('new');
+  const [existingBranchName, setExistingBranchName] = useState<string>('');
   const [toolType, setToolType] = useState<'claude' | 'codex' | 'none'>('none');
   const [claudeConfig, setClaudeConfig] = useState<ClaudeCodeConfig>({
     prompt: '',
@@ -196,6 +199,8 @@ export function CreateSessionDialog({ isOpen, onClose, projectName, projectId }:
       // Always clear session name and prompts when dialog opens
       setSessionName('');
       setSessionCount(1);
+      setBranchSelection('new');
+      setExistingBranchName('');
       setFormData(prev => ({ ...prev, count: 1 }));
       syncPromptAcrossConfigs('', 'none');
       syncImageAttachments(() => []);
@@ -641,7 +646,7 @@ export function CreateSessionDialog({ isOpen, onClose, projectName, projectId }:
       });
       const response = await API.sessions.create({
         prompt: finalPrompt || undefined,
-        worktreeTemplate: sessionName || undefined, // Pass undefined if empty for auto-naming
+        worktreeTemplate: branchSelection === 'existing' ? (existingBranchName || undefined) : (sessionName || undefined), // existing 分支用分支名
         count: sessionCount,
         // Model is now managed at panel level, not session level
         toolType,
@@ -650,6 +655,8 @@ export function CreateSessionDialog({ isOpen, onClose, projectName, projectId }:
         commitMode: commitModeSettings.mode,
         commitModeSettings: JSON.stringify(commitModeSettings),
         baseBranch: formData.baseBranch,
+        branchSelection,
+        branchName: branchSelection === 'existing' ? existingBranchName : undefined,
         codexConfig: toolType === 'codex' ? {
           model: codexConfig.model,
           modelProvider: codexConfig.modelProvider,
@@ -731,10 +738,10 @@ export function CreateSessionDialog({ isOpen, onClose, projectName, projectId }:
                     }}
                     error={worktreeError || undefined}
                     placeholder={hasApiKey ? "Leave empty for AI-generated name" : "Enter a name for your session"}
-                    disabled={isGeneratingName}
+                    disabled={isGeneratingName || branchSelection === 'existing'}
                     className="flex-1"
                   />
-                  {hasApiKey && formData.prompt.trim() && (
+                  {hasApiKey && formData.prompt.trim() && branchSelection !== 'existing' && (
                     <Button
                       type="button"
                       onClick={async () => {
@@ -1123,7 +1130,7 @@ export function CreateSessionDialog({ isOpen, onClose, projectName, projectId }:
                         savePreferences({ baseBranch: selectedBranch });
                       }}
                       className="w-full px-3 py-2 border border-border-primary rounded-md focus:outline-none focus:ring-2 focus:ring-interactive text-text-primary bg-surface-secondary"
-                      disabled={isLoadingBranches}
+                      disabled={isLoadingBranches || branchSelection === 'existing'}
                     >
                       {branches.map((branch, index) => {
                         // Check if this is the first non-worktree branch after worktree branches
@@ -1148,6 +1155,73 @@ export function CreateSessionDialog({ isOpen, onClose, projectName, projectId }:
                     <p className="text-xs text-text-tertiary mt-1">
                       Create the new session branch from this existing branch
                     </p>
+                  </div>
+                )}
+
+                {/* Branch selection mode */}
+                {branches.length > 0 && (
+                  <div className="space-y-2">
+                    <div className="flex items-center gap-3">
+                      <label className="text-sm font-medium text-text-secondary">分支来源</label>
+                      <div className="flex items-center gap-4">
+                        <label className="flex items-center gap-1 text-sm">
+                          <input
+                            type="radio"
+                            name="branchSelection"
+                            checked={branchSelection === 'new'}
+                            onChange={() => {
+                              setBranchSelection('new');
+                              // restore name
+                              setSessionName(previousNameRef.current || sessionName);
+                              setFormData(prev => ({ ...prev, branchSelection: 'new', branchName: undefined }));
+                            }}
+                          />
+                          新建分支
+                        </label>
+                        <label className="flex items-center gap-1 text-sm">
+                          <input
+                            type="radio"
+                            name="branchSelection"
+                            checked={branchSelection === 'existing'}
+                            onChange={() => {
+                              // remember current custom name
+                              previousNameRef.current = sessionName;
+                              setBranchSelection('existing');
+                              setFormData(prev => ({ ...prev, branchSelection: 'existing' }));
+                            }}
+                          />
+                          使用已有分支
+                        </label>
+                      </div>
+                    </div>
+
+                    {branchSelection === 'existing' && (
+                      <div>
+                        <select
+                          value={existingBranchName}
+                          onChange={(e) => {
+                            const selected = e.target.value;
+                            setExistingBranchName(selected);
+                            // auto-fill and lock session name
+                            setSessionName(selected);
+                            setFormData(prev => ({ ...prev, worktreeTemplate: selected, branchName: selected }));
+                            setWorktreeError(null);
+                          }}
+                          className="w-full px-3 py-2 border border-border-primary rounded-md focus:outline-none focus:ring-2 focus:ring-interactive text-text-primary bg-surface-secondary"
+                          disabled={isLoadingBranches}
+                        >
+                          <option value="" disabled>选择已有的本地分支</option>
+                          {branches.map(b => (
+                            <option key={b.name} value={b.name}>
+                              {b.name}{b.hasWorktree ? ' (has worktree)' : ''}{b.isCurrent ? ' (current)' : ''}
+                            </option>
+                          ))}
+                        </select>
+                        <p className="text-xs text-text-tertiary mt-1">
+                          选择已有分支时，会话名会自动使用该分支名且不可编辑；若该分支已有 worktree 将直接复用。
+                        </p>
+                      </div>
+                    )}
                   </div>
                 )}
                 
@@ -1186,12 +1260,18 @@ export function CreateSessionDialog({ isOpen, onClose, projectName, projectId }:
           <Button
             type="submit"
             form="create-session-form"
-            disabled={isSubmitting || !!worktreeError || (!hasApiKey && !sessionName)}
+            disabled={
+              isSubmitting ||
+              !!worktreeError ||
+              (!hasApiKey && branchSelection !== 'existing' && !sessionName) ||
+              (branchSelection === 'existing' && !existingBranchName)
+            }
             loading={isSubmitting}
             title={
               isSubmitting ? 'Creating session...' :
               worktreeError ? 'Please fix the session name error' :
-              (!hasApiKey && !sessionName) ? 'Please enter a session name (required without API key)' :
+              (branchSelection === 'existing' && !existingBranchName) ? '请选择已有分支' :
+              (!hasApiKey && branchSelection !== 'existing' && !sessionName) ? 'Please enter a session name (required without API key)' :
               toolType === 'none' ? 'Session will be created without AI tool' :
               undefined
             }

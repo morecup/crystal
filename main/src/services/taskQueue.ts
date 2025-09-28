@@ -29,6 +29,8 @@ interface CreateSessionJob {
   projectId?: number;
   folderId?: string;
   baseBranch?: string;
+  branchSelection?: 'new' | 'existing';
+  branchName?: string;
   autoCommit?: boolean;
   toolType?: 'claude' | 'codex' | 'none';
   commitMode?: 'structured' | 'checkpoint' | 'disabled';
@@ -136,7 +138,7 @@ export class TaskQueue {
     const sessionConcurrency = isLinux ? 1 : 5;
     
     this.sessionQueue.process(sessionConcurrency, async (job) => {
-      const { prompt, worktreeTemplate, index, permissionMode, projectId, baseBranch, autoCommit, toolType, codexConfig } = job.data;
+      const { prompt, worktreeTemplate, index, permissionMode, projectId, baseBranch, branchSelection, branchName, autoCommit, toolType, codexConfig } = job.data;
       const { sessionManager, worktreeManager, claudeCodeManager } = this.options;
 
       console.log(`[TaskQueue] Processing session creation job ${job.id}`, { prompt, worktreeTemplate, index, permissionMode, projectId, baseBranch });
@@ -160,44 +162,87 @@ export class TaskQueue {
 
         let worktreeName = worktreeTemplate;
         let sessionName: string;
-        
-        // Generate a name if template is empty - but skip if we're in multi-session creation with index
-        if (!worktreeName || worktreeName.trim() === '') {
-          // If this is part of a multi-session creation (has index), the base name should have been generated already
-          if (index !== undefined && index >= 0) {
-            console.log(`[TaskQueue] Multi-session creation detected (index ${index}), using fallback name`);
-            worktreeName = 'session';
-            sessionName = 'Session';
+        let worktreePath: string | undefined;
+        let baseCommit: string | undefined;
+        let actualBaseBranch: string | undefined;
+
+        const isExistingBranch = (branchSelection === 'existing' && !!branchName);
+
+        if (isExistingBranch) {
+          const selectedBranch = (branchName as string).trim();
+          console.log(`[TaskQueue] Existing branch mode selected: ${selectedBranch}`);
+
+          // Use branch name for session name (ensure uniqueness only for session name)
+          sessionName = await this.ensureUniqueSessionName(selectedBranch, index);
+          worktreeName = selectedBranch; // keep branch name as worktree_name for consistency/branch deletion
+
+          // Try to find existing worktree for this branch
+          const existingPath = await worktreeManager.findWorktreeByBranch(targetProject.path, selectedBranch);
+          if (existingPath) {
+            console.log(`[TaskQueue] Found existing worktree for branch ${selectedBranch}: ${existingPath}`);
+            worktreePath = existingPath;
+            try {
+              // Resolve the commit pointed by the branch (in main repo)
+              const { exec } = await import('child_process');
+              const { promisify } = await import('util');
+              const { getShellPath } = await import('../utils/shellPath');
+              const execAsync = promisify(exec);
+              const shellPath = getShellPath();
+              const { stdout } = await execAsync(`git rev-parse ${selectedBranch}`, { cwd: targetProject.path, env: { ...process.env, PATH: shellPath } });
+              baseCommit = stdout.trim();
+            } catch (e) {
+              console.warn('[TaskQueue] Failed to resolve base commit for existing branch, leaving undefined');
+            }
+            actualBaseBranch = selectedBranch;
           } else {
-            console.log(`[TaskQueue] No worktree template provided, generating name from prompt...`);
-            // Use the AI-powered name generator to generate a session name with spaces
-            sessionName = await this.options.worktreeNameGenerator.generateSessionName(prompt);
-            // Convert the session name to a worktree name (spaces to hyphens)
-            worktreeName = sessionName.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
-            console.log(`[TaskQueue] Generated session name: ${sessionName}`);
-            console.log(`[TaskQueue] Generated worktree name: ${worktreeName}`);
+            console.log(`[TaskQueue] No existing worktree for branch ${selectedBranch}, creating one...`);
+            // Create a new worktree attached to the existing branch
+            const result = await worktreeManager.createWorktree(
+              targetProject.path,
+              // derive folder name from branch (sanitize for folder)
+              selectedBranch
+                .replace(/[\\\/]/g, '-')
+                .replace(/\s+/g, '-')
+                .replace(/[^a-zA-Z0-9_.-]/g, '-'),
+              selectedBranch,
+              undefined,
+              targetProject.worktree_folder
+            );
+            worktreePath = result.worktreePath;
+            baseCommit = result.baseCommit;
+            actualBaseBranch = result.baseBranch;
           }
         } else {
-          // If we have a worktree template, use it as the session name as-is
-          sessionName = worktreeName;
-          
-          // For the worktree name, replace spaces with hyphens and make it lowercase
-          // but keep hyphens that are already there
-          if (worktreeName.includes(' ')) {
-            worktreeName = worktreeName.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
+          // New branch flow (existing behavior)
+          // Generate a name if template is empty - but skip if we're in multi-session creation with index
+          if (!worktreeName || worktreeName.trim() === '') {
+            if (index !== undefined && index >= 0) {
+              console.log(`[TaskQueue] Multi-session creation detected (index ${index}), using fallback name`);
+              worktreeName = 'session';
+              sessionName = 'Session';
+            } else {
+              console.log(`[TaskQueue] No worktree template provided, generating name from prompt...`);
+              sessionName = await this.options.worktreeNameGenerator.generateSessionName(prompt);
+              worktreeName = sessionName.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
+              console.log(`[TaskQueue] Generated session name: ${sessionName}`);
+              console.log(`[TaskQueue] Generated worktree name: ${worktreeName}`);
+            }
           } else {
-            // Already a valid worktree name format (no spaces), just clean it up
-            worktreeName = worktreeName.toLowerCase().replace(/[^a-z0-9-]/g, '');
+            sessionName = worktreeTemplate;
+            if (worktreeName.includes(' ')) {
+              worktreeName = worktreeName.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
+            } else {
+              worktreeName = worktreeName.toLowerCase().replace(/[^a-z0-9-]/g, '');
+            }
           }
+
+          // Ensure uniqueness for both names (only for new-branch mode where we create a new worktree)
+          const { sessionName: uniqueSessionName, worktreeName: uniqueWorktreeName } =
+            await this.ensureUniqueNames(sessionName, worktreeName, targetProject, index);
+          sessionName = uniqueSessionName;
+          worktreeName = uniqueWorktreeName;
         }
-        
-        // Ensure uniqueness for both names
-        const { sessionName: uniqueSessionName, worktreeName: uniqueWorktreeName } = 
-          await this.ensureUniqueNames(sessionName, worktreeName, targetProject, index);
-        sessionName = uniqueSessionName;
-        worktreeName = uniqueWorktreeName;
-        
-        console.log(`[TaskQueue] Creating worktree with name: ${worktreeName}`);
+
         console.log(`[TaskQueue] Session display name: ${sessionName}`);
         console.log(`[TaskQueue] Target project:`, JSON.stringify({
           id: targetProject.id,
@@ -206,14 +251,22 @@ export class TaskQueue {
           run_script: targetProject.run_script
         }, null, 2));
 
-        const { worktreePath, baseCommit, baseBranch: actualBaseBranch } = await worktreeManager.createWorktree(targetProject.path, worktreeName, undefined, baseBranch, targetProject.worktree_folder);
-        console.log(`[TaskQueue] Worktree created at: ${worktreePath}`);
-        console.log(`[TaskQueue] Base commit: ${baseCommit}, Base branch: ${actualBaseBranch}`);
+        if (!isExistingBranch) {
+          const result = await worktreeManager.createWorktree(targetProject.path, worktreeName, undefined, baseBranch, targetProject.worktree_folder);
+          worktreePath = result.worktreePath;
+          baseCommit = result.baseCommit;
+          actualBaseBranch = result.baseBranch;
+          console.log(`[TaskQueue] Worktree created at: ${worktreePath}`);
+          console.log(`[TaskQueue] Base commit: ${baseCommit}, Base branch: ${actualBaseBranch}`);
+        } else {
+          console.log(`[TaskQueue] Using worktree at: ${worktreePath}`);
+          console.log(`[TaskQueue] Base commit: ${baseCommit || '(unknown)'}, Base branch: ${actualBaseBranch}`);
+        }
         console.log(`[TaskQueue] Creating session in database`);
         
         const session = await sessionManager.createSession(
           sessionName,
-          worktreePath,
+          worktreePath!,
           prompt,
           worktreeName,
           permissionMode,
@@ -289,7 +342,7 @@ export class TaskQueue {
           });
           
           const buildCommands = targetProject.build_script.split('\n').filter(cmd => cmd.trim());
-          const buildResult = await sessionManager.runBuildScript(session.id, buildCommands, worktreePath);
+          const buildResult = await sessionManager.runBuildScript(session.id, buildCommands, session.worktreePath);
           console.log(`[TaskQueue] Build script completed. Success: ${buildResult.success}`);
         }
 
@@ -501,6 +554,8 @@ export class TaskQueue {
     permissionMode?: 'approve' | 'ignore',
     projectId?: number,
     baseBranch?: string,
+    branchSelection?: 'new' | 'existing',
+    branchName?: string,
     autoCommit?: boolean,
     toolType?: 'claude' | 'codex' | 'none',
     commitMode?: 'structured' | 'checkpoint' | 'disabled',
@@ -570,7 +625,7 @@ export class TaskQueue {
     for (let i = 0; i < count; i++) {
       // Use the generated base name if no template was provided
       const templateToUse = worktreeTemplate || generatedBaseName || '';
-      jobs.push(this.sessionQueue.add({ prompt, worktreeTemplate: templateToUse, index: i, permissionMode, projectId, folderId, baseBranch, autoCommit, toolType, commitMode, commitModeSettings, codexConfig }));
+      jobs.push(this.sessionQueue.add({ prompt, worktreeTemplate: templateToUse, index: i, permissionMode, projectId, folderId, baseBranch, branchSelection, branchName, autoCommit, toolType, commitMode, commitModeSettings, codexConfig }));
     }
     return Promise.all(jobs);
   }
