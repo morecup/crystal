@@ -1,7 +1,8 @@
 import { exec } from 'child_process';
 import { promisify } from 'util';
 import { join } from 'path';
-import { mkdir } from 'fs/promises';
+import { mkdir, rm, stat } from 'fs/promises';
+import { existsSync } from 'fs';
 import { getShellPath } from '../utils/shellPath';
 import { withLock } from '../utils/mutex';
 
@@ -177,16 +178,32 @@ export class WorktreeManager {
       } catch (error: any) {
         const errorMessage = error.stderr || error.stdout || error.message || String(error);
         
-        // If the worktree is not found, that's okay - it might have been manually deleted
-        if (errorMessage.includes('is not a working tree') || 
+        // If the worktree is not found, continue to filesystem cleanup below
+        if (
+          !(errorMessage.includes('is not a working tree') ||
             errorMessage.includes('does not exist') ||
-            errorMessage.includes('No such file or directory')) {
-          console.log(`Worktree ${worktreePath} already removed or doesn't exist, skipping...`);
-          return;
+            errorMessage.includes('No such file or directory'))
+        ) {
+          // For other errors, still rethrow after cleanup attempt below
+          console.warn(`[WorktreeManager] git worktree remove warning: ${errorMessage}`);
+        } else {
+          console.log(`Worktree ${worktreePath} already removed or doesn't exist via git, continuing to filesystem cleanup...`);
         }
-        
-        // For other errors, still throw
-        throw new Error(`Failed to remove worktree: ${errorMessage}`);
+      }
+
+      // Ensure the worktree directory itself is removed if it still exists (Windows often leaves empty dirs)
+      try {
+        if (existsSync(worktreePath)) {
+          await rm(worktreePath, { recursive: true, force: true });
+          // Double-check removal
+          if (existsSync(worktreePath)) {
+            throw new Error(`Residual worktree directory remains: ${worktreePath}`);
+          }
+          console.log(`[WorktreeManager] Physically removed worktree directory: ${worktreePath}`);
+        }
+      } catch (fsErr: any) {
+        console.error(`[WorktreeManager] Failed to remove worktree directory ${worktreePath}:`, fsErr);
+        throw new Error(`Failed to remove worktree directory: ${fsErr?.message || String(fsErr)}`);
       }
     });
   }
