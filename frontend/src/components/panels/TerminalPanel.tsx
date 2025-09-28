@@ -14,6 +14,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({ panel, isActive })
   const fitAddonRef = useRef<FitAddon | null>(null);
   const [isInitialized, setIsInitialized] = useState(false);
   const [initError, setInitError] = useState<string | null>(null);
+  const [notification, setNotification] = useState<{ message: string; type: 'copy' | 'paste' } | null>(null);
   
   // Get session data from context using the safe hook
   const sessionContext = useSession();
@@ -73,12 +74,11 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({ panel, isActive })
           scrollback: 50000
         });
         console.log('[TerminalPanel] XTerm instance created:', !!terminal);
-
         fitAddon = new FitAddon();
         terminal.loadAddon(fitAddon);
         console.log('[TerminalPanel] FitAddon loaded');
 
-
+        // 处理 Ctrl+V 粘贴
         terminal.attachCustomKeyEventHandler((ev: KeyboardEvent) => {
           const isCtrlV = (ev.ctrlKey || ev.metaKey) && (ev.code === 'KeyV' || (ev.key.toLowerCase() === 'v'));
           if (!isCtrlV) return true;
@@ -97,6 +97,50 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({ panel, isActive })
           return false;
         });
 
+        // 添加智能右键菜单功能（有选中时复制，无选中时粘贴）
+        const handleContextMenu = (e: MouseEvent) => {
+          e.preventDefault();
+          e.stopPropagation();
+          
+          // 检查是否有选中的文本
+          const selection = terminal.getSelection();
+          
+          if (selection && selection.length > 0) {
+            // 有选中文本时，复制到剪贴板
+            navigator.clipboard.writeText(selection)
+              .then(() => {
+                console.log('[TerminalPanel] Text copied to clipboard:', selection.substring(0, 50) + '...');
+                // 显示复制成功提示
+                setNotification({ message: '已复制到剪贴板', type: 'copy' });
+                setTimeout(() => setNotification(null), 2000);
+                // 清除选中状态
+                terminal.clearSelection();
+              })
+              .catch(err => {
+                console.error('Failed to copy to clipboard:', err);
+                setNotification({ message: '复制失败', type: 'copy' });
+                setTimeout(() => setNotification(null), 2000);
+              });
+          } else {
+            // 无选中文本时，从剪贴板粘贴
+            navigator.clipboard.readText()
+              .then(text => {
+                if (text && terminal && !disposed) {
+                  terminal.write(text);
+                  console.log('[TerminalPanel] Text pasted from clipboard:', text.substring(0, 50) + '...');
+                  // 显示粘贴成功提示
+                  setNotification({ message: '已粘贴', type: 'paste' });
+                  setTimeout(() => setNotification(null), 2000);
+                }
+              })
+              .catch(err => {
+                console.error('Failed to read clipboard:', err);
+                setNotification({ message: '粘贴失败', type: 'paste' });
+                setTimeout(() => setNotification(null), 2000);
+              });
+          }
+        };
+
         // FIX: Additional check before DOM manipulation
         if (terminalRef.current && !disposed) {
           console.log('[TerminalPanel] Opening terminal in DOM element:', terminalRef.current);
@@ -104,6 +148,9 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({ panel, isActive })
           console.log('[TerminalPanel] Terminal opened in DOM');
           fitAddon.fit();
           console.log('[TerminalPanel] FitAddon fitted');
+          
+          // 添加右键菜单事件监听器
+          terminalRef.current.addEventListener('contextmenu', handleContextMenu);
           
           xtermRef.current = terminal;
           fitAddonRef.current = fitAddon;
@@ -150,6 +197,10 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({ panel, isActive })
             resizeObserver.disconnect();
             unsubscribeOutput(); // Use the unsubscribe function
             inputDisposable.dispose();
+            // 移除右键菜单事件监听器
+            if (terminalRef.current) {
+              terminalRef.current.removeEventListener('contextmenu', handleContextMenu);
+            }
           };
         }
       } catch (error) {
@@ -233,6 +284,16 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({ panel, isActive })
       {!isInitialized && (
         <div className="absolute inset-0 flex items-center justify-center bg-gray-900 bg-opacity-75">
           <div className="text-gray-400">Initializing terminal...</div>
+        </div>
+      )}
+      {notification && (
+        <div className="absolute top-2 right-2 px-3 py-1 rounded-md text-sm font-medium animate-fade-in-out"
+             style={{
+               backgroundColor: notification.type === 'copy' ? 'rgba(34, 197, 94, 0.9)' : 'rgba(59, 130, 246, 0.9)',
+               color: 'white',
+               zIndex: 1000
+             }}>
+          {notification.message}
         </div>
       )}
     </div>
