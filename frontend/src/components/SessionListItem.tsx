@@ -312,6 +312,14 @@ export const SessionListItem = memo(function SessionListItem({ session, isNested
   const handleConfirmPermanentDelete = useCallback(async () => {
     addDeletingSessionId(session.id);
     try {
+      // If not archived, perform archive first, then permanent delete
+      if (!session.archived) {
+        const archiveRes = await API.sessions.delete(session.id);
+        if (!archiveRes.success) {
+          throw new Error(archiveRes.error || 'Failed to archive before deleting');
+        }
+      }
+
       const response = await API.sessions.deletePermanent(session.id);
       if (!response.success) {
         throw new Error(response.error || 'Failed to delete session permanently');
@@ -510,6 +518,12 @@ export const SessionListItem = memo(function SessionListItem({ session, isNested
               >
                 Archive
               </button>
+              <button
+                onClick={() => { closeMenu(); setShowPermanentDeleteConfirm(true); }}
+                className="w-full text-left px-4 py-2 text-sm text-status-error hover:bg-surface-hover hover:text-status-error"
+              >
+                Delete Permanently
+              </button>
             </>
           )}
           {session.archived && (
@@ -543,7 +557,11 @@ export const SessionListItem = memo(function SessionListItem({ session, isNested
         onClose={() => setShowPermanentDeleteConfirm(false)}
         onConfirm={handleConfirmPermanentDelete}
         title={`Delete Session Permanently`}
-        message={`Permanently delete session "${session.name}"? This will remove all history, outputs, panels, and logs. This action cannot be undone.`}
+        message={
+          session.archived
+            ? `Permanently delete session "${session.name}"? This will remove all history, outputs, panels, and logs. This action cannot be undone.`
+            : `This will archive session "${session.name}" and then permanently delete it, removing all history, outputs, panels, and logs. This action cannot be undone.`
+        }
         confirmText="Delete"
         confirmButtonClass="bg-red-600 hover:bg-red-700 text-white"
         icon={<Trash2 className="w-6 h-6 text-red-500 flex-shrink-0" />}
