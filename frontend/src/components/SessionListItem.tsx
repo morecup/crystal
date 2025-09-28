@@ -480,13 +480,17 @@ export const SessionListItem = memo(function SessionListItem({ session, isNested
           >
             {isClosing ? 'Closing Script...' : isRunning ? 'Stop Script' : 'Run Script'}
           </button>
-          <div className="border-t border-border-primary my-1" />
-          <button
-            onClick={handleDeleteFromMenu}
-            className="w-full text-left px-4 py-2 text-sm text-status-error hover:bg-surface-hover hover:text-status-error"
-          >
-            Archive
-          </button>
+          {!session.archived && (
+            <>
+              <div className="border-t border-border-primary my-1" />
+              <button
+                onClick={handleDeleteFromMenu}
+                className="w-full text-left px-4 py-2 text-sm text-status-error hover:bg-surface-hover hover:text-status-error"
+              >
+                Archive
+              </button>
+            </>
+          )}
         </div>
       )}
       
