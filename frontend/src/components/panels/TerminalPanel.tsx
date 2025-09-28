@@ -103,7 +103,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({ panel, isActive })
           e.stopPropagation();
           
           // 检查是否有选中的文本
-          const selection = terminal.getSelection();
+          const selection = terminal?.getSelection();
           
           if (selection && selection.length > 0) {
             // 有选中文本时，复制到剪贴板
@@ -114,7 +114,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({ panel, isActive })
                 setNotification({ message: '已复制到剪贴板', type: 'copy' });
                 setTimeout(() => setNotification(null), 2000);
                 // 清除选中状态
-                terminal.clearSelection();
+                terminal?.clearSelection();
               })
               .catch(err => {
                 console.error('Failed to copy to clipboard:', err);
