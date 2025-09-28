@@ -43,14 +43,14 @@ export class API {
       return window.electronAPI.sessions.create(request);
     },
 
-    async delete(sessionId: string) {
+    async delete(sessionId: string, options?: { deleteLocalBranch?: boolean; deleteRemoteBranch?: boolean }) {
       if (!isElectron()) throw new Error('Electron API not available');
-      return window.electronAPI.sessions.delete(sessionId);
+      return window.electronAPI.sessions.delete(sessionId, options);
     },
 
-    async deletePermanent(sessionId: string) {
+    async deletePermanent(sessionId: string, options?: { deleteLocalBranch?: boolean; deleteRemoteBranch?: boolean }) {
       if (!isElectron()) throw new Error('Electron API not available');
-      return window.electronAPI.sessions.deletePermanent(sessionId);
+      return window.electronAPI.sessions.deletePermanent(sessionId, options);
     },
 
     async sendInput(sessionId: string, input: string) {

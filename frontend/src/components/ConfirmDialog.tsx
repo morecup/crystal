@@ -11,6 +11,7 @@ interface ConfirmDialogProps {
   cancelText?: string;
   confirmButtonClass?: string;
   icon?: React.ReactNode;
+  children?: React.ReactNode;
 }
 
 export function ConfirmDialog({
@@ -22,7 +23,8 @@ export function ConfirmDialog({
   confirmText = 'Confirm',
   cancelText = 'Cancel',
   confirmButtonClass = 'bg-red-600 hover:bg-red-700 text-white',
-  icon
+  icon,
+  children
 }: ConfirmDialogProps) {
   // Handle keyboard events
   useEffect(() => {
@@ -76,6 +78,11 @@ export function ConfirmDialog({
           <p className="text-gray-700 dark:text-gray-300 whitespace-pre-line leading-relaxed">
             {message}
           </p>
+          {children && (
+            <div className="mt-4">
+              {children}
+            </div>
+          )}
         </div>
         
         <div className="flex justify-end space-x-3">

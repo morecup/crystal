@@ -31,6 +31,8 @@ export const SessionListItem = memo(function SessionListItem({ session, isNested
   const { menuState, openMenu, closeMenu, isMenuOpen } = useContextMenu();
   const [showArchiveConfirm, setShowArchiveConfirm] = useState(false);
   const [showPermanentDeleteConfirm, setShowPermanentDeleteConfirm] = useState(false);
+  const [deleteLocalBranch, setDeleteLocalBranch] = useState(true);
+  const [deleteRemoteBranch, setDeleteRemoteBranch] = useState(false);
   const [gitStatusLoading, setGitStatusLoading] = useState(false);
   
   
@@ -234,7 +236,10 @@ export const SessionListItem = memo(function SessionListItem({ session, isNested
   const handleConfirmArchive = useCallback(async () => {
     addDeletingSessionId(session.id);
     try {
-      const response = await API.sessions.delete(session.id);
+      const response = await API.sessions.delete(session.id, {
+        deleteLocalBranch,
+        deleteRemoteBranch
+      });
       
       if (!response.success) {
         throw new Error(response.error || 'Failed to archive session');
@@ -314,13 +319,19 @@ export const SessionListItem = memo(function SessionListItem({ session, isNested
     try {
       // If not archived, perform archive first, then permanent delete
       if (!session.archived) {
-        const archiveRes = await API.sessions.delete(session.id);
+        const archiveRes = await API.sessions.delete(session.id, {
+          deleteLocalBranch,
+          deleteRemoteBranch
+        });
         if (!archiveRes.success) {
           throw new Error(archiveRes.error || 'Failed to archive before deleting');
         }
       }
 
-      const response = await API.sessions.deletePermanent(session.id);
+      const response = await API.sessions.deletePermanent(session.id, {
+        deleteLocalBranch,
+        deleteRemoteBranch
+      });
       if (!response.success) {
         throw new Error(response.error || 'Failed to delete session permanently');
       }
@@ -550,7 +561,20 @@ export const SessionListItem = memo(function SessionListItem({ session, isNested
         confirmText="Archive"
         confirmButtonClass="bg-amber-600 hover:bg-amber-700 text-white"
         icon={<Archive className="w-6 h-6 text-amber-500 flex-shrink-0" />}
-      />
+      >
+        {!session.isMainRepo && (
+          <div className="mt-3 space-y-2">
+            <label className="flex items-center gap-2 text-sm">
+              <input type="checkbox" checked={deleteLocalBranch} onChange={(e) => setDeleteLocalBranch(e.target.checked)} />
+              <span>同时删除本地分支（默认）</span>
+            </label>
+            <label className="flex items-center gap-2 text-sm">
+              <input type="checkbox" checked={deleteRemoteBranch} onChange={(e) => setDeleteRemoteBranch(e.target.checked)} />
+              <span>同时删除远程分支</span>
+            </label>
+          </div>
+        )}
+      </ConfirmDialog>
 
       <ConfirmDialog
         isOpen={showPermanentDeleteConfirm}
@@ -565,7 +589,20 @@ export const SessionListItem = memo(function SessionListItem({ session, isNested
         confirmText="Delete"
         confirmButtonClass="bg-red-600 hover:bg-red-700 text-white"
         icon={<Trash2 className="w-6 h-6 text-red-500 flex-shrink-0" />}
-      />
+      >
+        {!session.isMainRepo && (
+          <div className="mt-3 space-y-2">
+            <label className="flex items-center gap-2 text-sm">
+              <input type="checkbox" checked={deleteLocalBranch} onChange={(e) => setDeleteLocalBranch(e.target.checked)} />
+              <span>同时删除本地分支（默认）</span>
+            </label>
+            <label className="flex items-center gap-2 text-sm">
+              <input type="checkbox" checked={deleteRemoteBranch} onChange={(e) => setDeleteRemoteBranch(e.target.checked)} />
+              <span>同时删除远程分支</span>
+            </label>
+          </div>
+        )}
+      </ConfirmDialog>
     </>
   );
 });

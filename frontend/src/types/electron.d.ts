@@ -38,8 +38,8 @@ interface ElectronAPI {
     getArchivedWithProjects: () => Promise<IPCResponse>;
     get: (sessionId: string) => Promise<IPCResponse>;
     create: (request: any) => Promise<IPCResponse>;
-    delete: (sessionId: string) => Promise<IPCResponse>;
-    deletePermanent: (sessionId: string) => Promise<IPCResponse>;
+    delete: (sessionId: string, options?: { deleteLocalBranch?: boolean; deleteRemoteBranch?: boolean }) => Promise<IPCResponse>;
+    deletePermanent: (sessionId: string, options?: { deleteLocalBranch?: boolean; deleteRemoteBranch?: boolean }) => Promise<IPCResponse>;
     sendInput: (sessionId: string, input: string) => Promise<IPCResponse>;
     continue: (sessionId: string, prompt?: string) => Promise<IPCResponse>;
     getOutput: (sessionId: string, limit?: number) => Promise<IPCResponse>;

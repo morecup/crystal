@@ -5,6 +5,7 @@ import { existsSync } from 'fs';
 import type { AppServices } from './types';
 import type { CreateSessionRequest } from '../types/session';
 import { getCrystalSubdirectory } from '../utils/crystalDirectory';
+import { execSync } from '../utils/commandExecutor';
 import { convertDbFolderToFolder } from './folders';
 import { panelManager } from '../services/panelManager';
 import { cleanupSessionLogs } from './logs';
@@ -232,7 +233,7 @@ export function registerSessionHandlers(ipcMain: IpcMain, services: AppServices)
     }
   });
 
-  ipcMain.handle('sessions:delete', async (_event, sessionId: string) => {
+  ipcMain.handle('sessions:delete', async (_event, sessionId: string, options?: { deleteLocalBranch?: boolean; deleteRemoteBranch?: boolean }) => {
     try {
       // Get database session details before archiving (includes worktree_name and project_id)
       const dbSession = databaseService.getSession(sessionId);
@@ -280,6 +281,29 @@ export function registerSessionHandlers(ipcMain: IpcMain, services: AppServices)
               
               console.log(`[Main] Successfully removed worktree ${dbSession.worktree_name}`);
               cleanupMessage += `\x1b[32m✓ Worktree removed successfully\x1b[0m\r\n`;
+              // Optional: delete branches as requested
+              const deleteLocal = options?.deleteLocalBranch ?? true;
+              const deleteRemote = options?.deleteRemoteBranch ?? false;
+              if (deleteLocal || deleteRemote) {
+                try {
+                  if (deleteLocal) {
+                    try {
+                      execSync(`git branch -D ${dbSession.worktree_name}`, { cwd: project.path, encoding: 'utf-8' } as any);
+                      cleanupMessage += `\x1b[32m✓ Local branch deleted\x1b[0m\r\n`;
+                    } catch (e) {
+                      cleanupMessage += `\x1b[33m⚠ Failed to delete local branch\x1b[0m\r\n`;
+                    }
+                  }
+                  if (deleteRemote) {
+                    try {
+                      execSync(`git push origin --delete ${dbSession.worktree_name}`, { cwd: project.path, encoding: 'utf-8' } as any);
+                      cleanupMessage += `\x1b[32m✓ Remote branch deleted\x1b[0m\r\n`;
+                    } catch (e) {
+                      cleanupMessage += `\x1b[33m⚠ Failed to delete remote branch (may not exist)\x1b[0m\r\n`;
+                    }
+                  }
+                } catch {}
+              }
             } catch (worktreeError) {
               // Log the error but don't fail
               console.error(`[Main] Failed to remove worktree ${dbSession.worktree_name}:`, worktreeError);
@@ -358,7 +382,7 @@ export function registerSessionHandlers(ipcMain: IpcMain, services: AppServices)
   });
 
   // Permanently delete an archived session
-  ipcMain.handle('sessions:delete-permanent', async (_event, sessionId: string) => {
+  ipcMain.handle('sessions:delete-permanent', async (_event, sessionId: string, options?: { deleteLocalBranch?: boolean; deleteRemoteBranch?: boolean }) => {
     try {
       const dbSession = databaseService.getSession(sessionId);
       if (!dbSession) {
@@ -387,6 +411,23 @@ export function registerSessionHandlers(ipcMain: IpcMain, services: AppServices)
       if (!ok) {
         return { success: false, error: 'Failed to delete session' };
       }
+
+      // Optionally delete branches for archived session (worktree already removed earlier on archive)
+      try {
+        if (dbSession.worktree_name && dbSession.project_id && !dbSession.is_main_repo) {
+          const project = databaseService.getProject(dbSession.project_id);
+          if (project) {
+            const deleteLocal = options?.deleteLocalBranch ?? true;
+            const deleteRemote = options?.deleteRemoteBranch ?? false;
+            if (deleteLocal) {
+              try { execSync(`git branch -D ${dbSession.worktree_name}`, { cwd: project.path, encoding: 'utf-8' } as any); } catch {}
+            }
+            if (deleteRemote) {
+              try { execSync(`git push origin --delete ${dbSession.worktree_name}`, { cwd: project.path, encoding: 'utf-8' } as any); } catch {}
+            }
+          }
+        }
+      } catch {}
 
       // Notify renderer to update lists
       sessionManager.emit('session-deleted', { id: sessionId, reason: 'permanent' });
