@@ -40,3 +40,4 @@
 - Use repository scripts (pnpm) and keep formatting consistent with existing files.
 - Always review the root `CLAUDE.md` before beginning any work. 
 - Scan the repository for every `CLAUDE.md`, and when working in a folder or any of its subfolders that has one, read and follow that file too.
+- 我们之间使用中文交流和生成文档。git提交信息也需要使用中文。
