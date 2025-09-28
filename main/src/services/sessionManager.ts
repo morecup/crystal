@@ -602,8 +602,8 @@ export class SessionManager extends EventEmitter {
       const archivedSession = this.convertDbSessionToSession(archivedDbSession);
       this.emit('session-archived', archivedSession);
     }
-    // Keep the deleted event to remove from active lists
-    this.emit('session-deleted', { id });
+    // Keep the deleted event to remove from active lists, include reason
+    this.emit('session-deleted', { id, reason: 'archived' });
   }
 
   stopSession(id: string): void {

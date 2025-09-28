@@ -358,16 +358,18 @@ export function DraggableProjectTreeView() {
         return next;
       });
 
-      // Also remove from archived list if present (permanent delete from archived)
-      setArchivedProjectsWithSessions(prevProjects => {
-        const updated = prevProjects
-          .map(project => ({
-            ...project,
-            sessions: project.sessions.filter(s => s.id !== deletedSession.id)
-          }))
-          .filter(project => project.sessions.length > 0);
-        return updated;
-      });
+      // If this is a permanent delete, also remove from archived list
+      if ((deletedSession as any).reason === 'permanent') {
+        setArchivedProjectsWithSessions(prevProjects => {
+          const updated = prevProjects
+            .map(project => ({
+              ...project,
+              sessions: project.sessions.filter(s => s.id !== deletedSession.id)
+            }))
+            .filter(project => project.sessions.length > 0);
+          return updated;
+        });
+      }
     };
 
     const handleSessionArchived = (archivedSession: Session) => {

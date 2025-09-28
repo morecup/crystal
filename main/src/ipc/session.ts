@@ -389,7 +389,7 @@ export function registerSessionHandlers(ipcMain: IpcMain, services: AppServices)
       }
 
       // Notify renderer to update lists
-      sessionManager.emit('session-deleted', { id: sessionId });
+      sessionManager.emit('session-deleted', { id: sessionId, reason: 'permanent' });
       return { success: true };
     } catch (error) {
       console.error('Failed to permanently delete session:', error);
