@@ -1112,53 +1112,7 @@ export function CreateSessionDialog({ isOpen, onClose, projectName, projectId }:
             {/* Advanced Options - Collapsible */}
             {showAdvanced && (
               <div className="px-6 pb-6 space-y-4 border-t border-border-primary pt-4">
-                {/* Base Branch */}
-                {branches.length > 0 && (
-                  <div>
-                    <div className="flex items-center gap-2 mb-1">
-                      <GitBranch className="w-4 h-4 text-text-tertiary" />
-                      <label htmlFor="baseBranch" className="text-sm font-medium text-text-secondary">
-                        Base Branch
-                      </label>
-                    </div>
-                    <select
-                      id="baseBranch"
-                      value={formData.baseBranch || ''}
-                      onChange={(e) => {
-                        const selectedBranch = e.target.value;
-                        setFormData({ ...formData, baseBranch: selectedBranch });
-                        savePreferences({ baseBranch: selectedBranch });
-                      }}
-                      className="w-full px-3 py-2 border border-border-primary rounded-md focus:outline-none focus:ring-2 focus:ring-interactive text-text-primary bg-surface-secondary"
-                      disabled={isLoadingBranches || branchSelection === 'existing'}
-                    >
-                      {branches.map((branch, index) => {
-                        // Check if this is the first non-worktree branch after worktree branches
-                        const isFirstNonWorktree = index > 0 && 
-                          !branch.hasWorktree && 
-                          branches[index - 1].hasWorktree;
-                        
-                        return (
-                          <React.Fragment key={branch.name}>
-                            {isFirstNonWorktree && (
-                              <option disabled value="">
-                                ──────────────
-                              </option>
-                            )}
-                            <option value={branch.name}>
-                              {branch.name} {branch.isCurrent ? '(current)' : ''}
-                            </option>
-                          </React.Fragment>
-                        );
-                      })}
-                    </select>
-                    <p className="text-xs text-text-tertiary mt-1">
-                      Create the new session branch from this existing branch
-                    </p>
-                  </div>
-                )}
-
-                {/* Branch selection mode */}
+                {/* Branch selection mode (always on top for consistent UX) */}
                 {branches.length > 0 && (
                   <div className="space-y-2">
                     <div className="flex items-center gap-3">
@@ -1194,37 +1148,84 @@ export function CreateSessionDialog({ isOpen, onClose, projectName, projectId }:
                         </label>
                       </div>
                     </div>
-
-                    {branchSelection === 'existing' && (
-                      <div>
-                        <select
-                          value={existingBranchName}
-                          onChange={(e) => {
-                            const selected = e.target.value;
-                            setExistingBranchName(selected);
-                            // auto-fill and lock session name
-                            setSessionName(selected);
-                            setFormData(prev => ({ ...prev, worktreeTemplate: selected, branchName: selected }));
-                            setWorktreeError(null);
-                          }}
-                          className="w-full px-3 py-2 border border-border-primary rounded-md focus:outline-none focus:ring-2 focus:ring-interactive text-text-primary bg-surface-secondary"
-                          disabled={isLoadingBranches}
-                        >
-                          <option value="" disabled>选择已有的本地分支</option>
-                          {branches.map(b => (
-                            <option key={b.name} value={b.name}>
-                              {b.name}{b.hasWorktree ? ' (has worktree)' : ''}{b.isCurrent ? ' (current)' : ''}
-                            </option>
-                          ))}
-                        </select>
-                        <p className="text-xs text-text-tertiary mt-1">
-                          选择已有分支时，会话名会自动使用该分支名且不可编辑；若该分支已有 worktree 将直接复用。
-                        </p>
-                      </div>
-                    )}
                   </div>
                 )}
-                
+
+                {/* Existing Branch - shown only for existing branch flow, placed under source selection */}
+                {branches.length > 0 && branchSelection === 'existing' && (
+                  <div>
+                    <div className="flex items-center gap-2 mb-1">
+                      <GitBranch className="w-4 h-4 text-text-tertiary" />
+                      <label className="text-sm font-medium text-text-secondary">已有分支</label>
+                    </div>
+                    <select
+                      value={existingBranchName}
+                      onChange={(e) => {
+                        const selected = e.target.value;
+                        setExistingBranchName(selected);
+                        // auto-fill and lock session name
+                        setSessionName(selected);
+                        setFormData(prev => ({ ...prev, worktreeTemplate: selected, branchName: selected }));
+                        setWorktreeError(null);
+                      }}
+                      className="w-full px-3 py-2 border border-border-primary rounded-md focus:outline-none focus:ring-2 focus:ring-interactive text-text-primary bg-surface-secondary"
+                      disabled={isLoadingBranches}
+                    >
+                      <option value="" disabled>选择已有的本地分支</option>
+                      {branches.map(b => (
+                        <option key={b.name} value={b.name}>
+                          {b.name}{b.hasWorktree ? ' (has worktree)' : ''}{b.isCurrent ? ' (current)' : ''}
+                        </option>
+                      ))}
+                    </select>
+                    <p className="text-xs text-text-tertiary mt-1">
+                      选择已有分支时，会话名会自动使用该分支名且不可编辑；若该分支已有 worktree 将直接复用。
+                    </p>
+                  </div>
+                )}
+
+                {/* Base Branch - shown only for new branch flow, placed under source selection */}
+                {branches.length > 0 && branchSelection !== 'existing' && (
+                  <div>
+                    <div className="flex items-center gap-2 mb-1">
+                      <GitBranch className="w-4 h-4 text-text-tertiary" />
+                      <label htmlFor="baseBranch" className="text-sm font-medium text-text-secondary">
+                        Base Branch
+                      </label>
+                    </div>
+                    <select
+                      id="baseBranch"
+                      value={formData.baseBranch || ''}
+                      onChange={(e) => {
+                        const selectedBranch = e.target.value;
+                        setFormData({ ...formData, baseBranch: selectedBranch });
+                        savePreferences({ baseBranch: selectedBranch });
+                      }}
+                      className="w-full px-3 py-2 border border-border-primary rounded-md focus:outline-none focus:ring-2 focus:ring-interactive text-text-primary bg-surface-secondary"
+                      disabled={isLoadingBranches}
+                    >
+                      {branches.map((branch, index) => {
+                        const isFirstNonWorktree = index > 0 && !branch.hasWorktree && branches[index - 1].hasWorktree;
+                        return (
+                          <React.Fragment key={branch.name}>
+                            {isFirstNonWorktree && (
+                              <option disabled value="">
+                                ──────────────
+                              </option>
+                            )}
+                            <option value={branch.name}>
+                              {branch.name} {branch.isCurrent ? '(current)' : ''}
+                            </option>
+                          </React.Fragment>
+                        );
+                      })}
+                    </select>
+                    <p className="text-xs text-text-tertiary mt-1">
+                      Create the new session branch from this existing branch
+                    </p>
+                  </div>
+                )}
+
                 {/* Commit Mode Settings */}
                 <CommitModeSettings
                   projectId={projectId}
