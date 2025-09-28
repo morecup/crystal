@@ -14,7 +14,8 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({ panel, isActive })
   const fitAddonRef = useRef<FitAddon | null>(null);
   const [isInitialized, setIsInitialized] = useState(false);
   const [initError, setInitError] = useState<string | null>(null);
-  const [notification, setNotification] = useState<{ message: string; type: 'copy' | 'paste' } | null>(null);
+  const [notification, setNotification] = useState<{ message: string; type: 'copy' | 'paste' | 'commit' | 'error' } | null>(null);
+  const [committing, setCommitting] = useState(false);
   
   // Get session data from context using the safe hook
   const sessionContext = useSession();
@@ -280,6 +281,34 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({ panel, isActive })
   // Always render the terminal div to keep XTerm instance alive
   return (
     <div className="h-full w-full relative">
+      {/* Smart Commit Button */}
+      <div className="absolute top-2 right-2 z-50 flex items-center gap-2 opacity-0 hover:opacity-100 transition-opacity duration-200 group pointer-events-none">
+        <button
+          className={`pointer-events-auto px-2 py-1 text-xs rounded bg-interactive text-white hover:bg-interactive-hover ${committing ? 'opacity-70 cursor-wait' : ''}`}
+          title="Smart Commit (遵循 Commit Mode)"
+          disabled={!sessionId || !workingDirectory || committing}
+          onClick={async () => {
+            if (!sessionId) return;
+            setCommitting(true);
+            try {
+              const res = await window.electronAPI.sessions.smartCommit(sessionId, {} as any);
+              if (res.success) {
+                setNotification({ message: '提交成功', type: 'commit' });
+              } else {
+                setNotification({ message: res.error || '提交失败', type: 'error' });
+              }
+            } catch (e: any) {
+              setNotification({ message: e?.message || '提交失败', type: 'error' });
+            } finally {
+              setTimeout(() => setNotification(null), 2500);
+              setCommitting(false);
+            }
+          }}
+        >
+          {committing ? '提交中…' : 'Smart Commit'}
+        </button>
+      </div>
+
       <div ref={terminalRef} className="h-full w-full" />
       {!isInitialized && (
         <div className="absolute inset-0 flex items-center justify-center bg-gray-900 bg-opacity-75">
@@ -287,9 +316,12 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({ panel, isActive })
         </div>
       )}
       {notification && (
-        <div className="absolute top-2 right-2 px-3 py-1 rounded-md text-sm font-medium animate-fade-in-out"
+        <div className="absolute top-10 right-2 px-3 py-1 rounded-md text-sm font-medium animate-fade-in-out"
              style={{
-               backgroundColor: notification.type === 'copy' ? 'rgba(34, 197, 94, 0.9)' : 'rgba(59, 130, 246, 0.9)',
+               backgroundColor: notification.type === 'copy' ? 'rgba(34, 197, 94, 0.9)'
+                 : notification.type === 'commit' ? 'rgba(16, 185, 129, 0.9)'
+                 : notification.type === 'error' ? 'rgba(239, 68, 68, 0.9)'
+                 : 'rgba(59, 130, 246, 0.9)',
                color: 'white',
                zIndex: 1000
              }}>

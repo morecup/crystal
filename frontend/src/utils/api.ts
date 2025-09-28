@@ -112,6 +112,11 @@ export class API {
       return window.electronAPI.sessions.gitCommit(sessionId, message);
     },
 
+    async smartCommit(sessionId: string, options?: { messageOverride?: string; addAll?: boolean }) {
+      if (!isElectron()) throw new Error('Electron API not available');
+      return window.electronAPI.sessions.smartCommit(sessionId, options);
+    },
+
     async gitDiff(sessionId: string) {
       if (!isElectron()) throw new Error('Electron API not available');
       return window.electronAPI.sessions.gitDiff(sessionId);

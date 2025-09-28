@@ -9,7 +9,7 @@ import type { Session } from '../types/session';
 import type { GitCommit } from '../services/gitDiffManager';
 
 export function registerGitHandlers(ipcMain: IpcMain, services: AppServices): void {
-  const { sessionManager, gitDiffManager, worktreeManager, claudeCodeManager, gitStatusManager, databaseService } = services;
+  const { sessionManager, gitDiffManager, worktreeManager, claudeCodeManager, gitStatusManager, databaseService, configManager } = services;
 
   // Helper function to emit git operation events to all sessions in a project
   const emitGitOperationToProject = (sessionId: string, eventType: PanelEventType, message: string, details?: any) => {
@@ -289,6 +289,110 @@ export function registerGitHandlers(ipcMain: IpcMain, services: AppServices): vo
       console.error('Failed to commit changes:', error);
       const errorMessage = error.message || error.stderr || 'Failed to commit changes';
       return { success: false, error: errorMessage };
+    }
+  });
+
+  // Smart Commit for Terminal/WSL honoring Commit Mode (structured/checkpoint/disabled)
+  ipcMain.handle('sessions:smart-commit', async (_event, sessionId: string, options?: { messageOverride?: string; addAll?: boolean }) => {
+    try {
+      const session = await sessionManager.getSession(sessionId);
+      if (!session || !session.worktreePath) {
+        return { success: false, error: 'Session or worktree path not found' };
+      }
+
+      const project = sessionManager.getProjectForSession(sessionId);
+      // Determine effective commit mode
+      const commitMode = (session.commitMode as any) || (project as any)?.commit_mode || 'checkpoint';
+
+      // Check changes
+      const status = execSync('git status --porcelain', { cwd: session.worktreePath, encoding: 'utf-8' }).trim();
+      if (!status) {
+        return { success: false, error: 'No changes to commit' };
+      }
+
+      if (commitMode === 'disabled') {
+        return { success: false, error: 'Commit Mode is disabled for this session/project' };
+      }
+
+      // Build commit message
+      let message = options?.messageOverride?.trim();
+      const settings = (() => {
+        try {
+          return session.commitModeSettings ? JSON.parse(session.commitModeSettings) : {};
+        } catch {
+          return {};
+        }
+      })();
+
+      const getCheckpointPrefix = () => settings.checkpointPrefix || (project as any)?.commit_checkpoint_prefix || 'checkpoint: ';
+
+      if (!message) {
+        if (commitMode === 'checkpoint') {
+          const prefix = getCheckpointPrefix();
+          message = `${prefix}${new Date().toLocaleString()}`;
+        } else if (commitMode === 'structured') {
+          // Try Anthropics; fall back to checkpoint if not available or fails
+          try {
+            const apiKey = configManager.getAnthropicApiKey?.();
+            if (apiKey) {
+              const Anthropic = (require('@anthropic-ai/sdk').default);
+              const client = new Anthropic({ apiKey });
+
+              // Create short context from diff and names
+              const nameStatus = execSync('git diff --name-status', { cwd: session.worktreePath, encoding: 'utf-8' }).trim().slice(0, 4000);
+              let diffText = '';
+              try {
+                diffText = execSync('git diff -U0', { cwd: session.worktreePath, encoding: 'utf-8', maxBuffer: 5 * 1024 * 1024 }).trim().slice(0, 10000);
+              } catch {
+                diffText = '';
+              }
+
+              const { DEFAULT_STRUCTURED_PROMPT_TEMPLATE } = require('../../../shared/types');
+              const structuredPrompt = settings.structuredPromptTemplate || DEFAULT_STRUCTURED_PROMPT_TEMPLATE;
+
+              const promptContent = `Generate a Conventional Commits style commit message based on the changes.\n\n${structuredPrompt}\n\nChanged files (name-status):\n${nameStatus}\n\nUnified diff (trimmed):\n${diffText}`;
+
+              const resp = await client.messages.create({
+                model: 'claude-3-haiku-20240307',
+                max_tokens: 200,
+                temperature: 0.2,
+                messages: [{ role: 'user', content: promptContent }]
+              });
+
+              const first = resp?.content?.[0];
+              const text = first && (first as any).type === 'text' ? (first as any).text : undefined;
+              if (text && text.trim()) {
+                message = text.trim().split('\n')[0].slice(0, 140);
+              }
+            }
+          } catch (e) {
+            // Fall back silently
+          }
+
+          if (!message) {
+            const prefix = getCheckpointPrefix();
+            message = `${prefix}${new Date().toLocaleString()}`;
+          }
+        }
+      }
+
+      // Stage and commit
+      try {
+        execSync('git add -A', { cwd: session.worktreePath });
+        const commitCommand = buildGitCommitCommand(message!);
+        execSync(commitCommand, { cwd: session.worktreePath });
+      } catch (err: any) {
+        if (err?.stdout?.includes('pre-commit') || err?.stderr?.includes('pre-commit')) {
+          return { success: false, error: 'Pre-commit hooks failed. Please fix the issues and try again.' };
+        }
+        throw err;
+      }
+
+      await refreshGitStatusForSession(sessionId, true);
+      return { success: true, message };
+    } catch (error: any) {
+      console.error('[Git] Smart commit failed:', error);
+      return { success: false, error: error?.message || 'Smart commit failed' };
     }
   });
 

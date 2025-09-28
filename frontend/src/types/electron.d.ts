@@ -55,6 +55,7 @@ interface ElectronAPI {
     getExecutions: (sessionId: string) => Promise<IPCResponse>;
     getExecutionDiff: (sessionId: string, executionId: string) => Promise<IPCResponse>;
     gitCommit: (sessionId: string, message: string) => Promise<IPCResponse>;
+    smartCommit: (sessionId: string, options?: { messageOverride?: string; addAll?: boolean }) => Promise<IPCResponse>;
     gitDiff: (sessionId: string) => Promise<IPCResponse>;
     getCombinedDiff: (sessionId: string, executionIds?: number[]) => Promise<IPCResponse>;
     
