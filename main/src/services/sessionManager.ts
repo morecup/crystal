@@ -596,7 +596,14 @@ export class SessionManager extends EventEmitter {
     await this.terminalSessionManager.closeTerminalSession(id);
     
     this.activeSessions.delete(id);
-    this.emit('session-deleted', { id }); // Keep the same event name for frontend compatibility
+    // Emit archived event with full session so renderer can add to archived list
+    const archivedDbSession = this.db.getSession(id);
+    if (archivedDbSession) {
+      const archivedSession = this.convertDbSessionToSession(archivedDbSession);
+      this.emit('session-archived', archivedSession);
+    }
+    // Keep the deleted event to remove from active lists
+    this.emit('session-deleted', { id });
   }
 
   stopSession(id: string): void {

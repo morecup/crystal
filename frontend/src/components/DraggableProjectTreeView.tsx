@@ -318,22 +318,47 @@ export function DraggableProjectTreeView() {
     };
     
     const handleSessionDeleted = (deletedSession: Session) => {
+      // Track folder to potentially auto-delete if it becomes empty
+      let folderToCheck: { projectId: number; folderId: string } | null = null;
+
       // Remove the deleted session from the active projects list
-      setProjectsWithSessions(prevProjects => 
-        prevProjects.map(project => {
-          const sessionIndex = project.sessions.findIndex(s => s.id === deletedSession.id);
-          if (sessionIndex !== -1) {
+      setProjectsWithSessions(prevProjects => {
+        const next = prevProjects.map(project => {
+          const target = project.sessions.find(s => s.id === deletedSession.id);
+          if (target) {
+            if (target.folderId) {
+              folderToCheck = { projectId: project.id, folderId: target.folderId };
+            }
             const updatedSessions = project.sessions.filter(s => s.id !== deletedSession.id);
-            return {
-              ...project,
-              sessions: updatedSessions
-            };
+            return { ...project, sessions: updatedSessions };
           }
           return project;
-        })
-      );
+        });
 
-      // Also remove from archived list if present
+        // Auto-remove empty folder (no sessions and no subfolders)
+        if (folderToCheck) {
+          const { projectId, folderId } = folderToCheck;
+          const proj = next.find(p => p.id === projectId);
+          if (proj) {
+            const hasSessions = proj.sessions.some(s => s.folderId === folderId);
+            const hasChildFolders = (proj.folders || []).some(f => f.parentFolderId === folderId);
+            if (!hasSessions && !hasChildFolders) {
+              // Fire-and-forget backend deletion; update local state optimistically
+              API.folders.delete(folderId).catch(() => {/* ignore */});
+              const updatedProj = {
+                ...proj,
+                folders: (proj.folders || []).filter(f => f.id !== folderId)
+              };
+              const idx = next.findIndex(p => p.id === projectId);
+              if (idx !== -1) next[idx] = updatedProj as any;
+            }
+          }
+        }
+
+        return next;
+      });
+
+      // Also remove from archived list if present (permanent delete from archived)
       setArchivedProjectsWithSessions(prevProjects => {
         const updated = prevProjects
           .map(project => ({
@@ -342,6 +367,32 @@ export function DraggableProjectTreeView() {
           }))
           .filter(project => project.sessions.length > 0);
         return updated;
+      });
+    };
+
+    const handleSessionArchived = (archivedSession: Session) => {
+      // Add archived session into archivedProjectsWithSessions
+      setArchivedProjectsWithSessions(prev => {
+        const existsProject = prev.find(p => p.id === archivedSession.projectId);
+        if (existsProject) {
+          // Avoid duplicate
+          if (!existsProject.sessions.some(s => s.id === archivedSession.id)) {
+            return prev.map(p => p.id === archivedSession.projectId
+              ? { ...p, sessions: [...p.sessions, archivedSession] }
+              : p
+            );
+          }
+          return prev;
+        }
+        // Find project meta from active projects to populate name and folders
+        const activeProject = projectsWithSessions.find(p => p.id === archivedSession.projectId);
+        if (activeProject) {
+          const newEntry = { ...activeProject, sessions: [archivedSession], folders: [] as Folder[] } as ProjectWithSessions;
+          return [...prev, newEntry];
+        }
+        // Fallback: minimal project container
+        const fallback = { id: archivedSession.projectId!, name: `Project ${archivedSession.projectId}`, sessions: [archivedSession], folders: [] } as any;
+        return [...prev, fallback];
       });
     };
     
@@ -370,6 +421,7 @@ export function DraggableProjectTreeView() {
       const unsubscribeCreated = window.electronAPI.events.onSessionCreated(handleSessionCreated);
       const unsubscribeUpdated = window.electronAPI.events.onSessionUpdated(handleSessionUpdated);
       const unsubscribeDeleted = window.electronAPI.events.onSessionDeleted(handleSessionDeleted);
+      const unsubscribeArchived = window.electronAPI.events.onSessionArchived(handleSessionArchived);
       const unsubscribeFolderCreated = window.electronAPI.events.onFolderCreated(handleFolderCreated);
       const unsubscribeFolderUpdated = window.electronAPI.events.onFolderUpdated(handleFolderUpdated);
       
@@ -397,6 +449,7 @@ export function DraggableProjectTreeView() {
         unsubscribeCreated();
         unsubscribeUpdated();
         unsubscribeDeleted();
+        unsubscribeArchived();
         unsubscribeFolderCreated();
         unsubscribeFolderUpdated();
         unsubscribeProjectUpdated();

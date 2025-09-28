@@ -271,6 +271,18 @@ export function setupEventListeners(services: AppServices, getMainWindow: () => 
     }
   });
 
+  // Forward archived sessions to renderer so archived panel updates live
+  sessionManager.on('session-archived', (session) => {
+    const mw = getMainWindow();
+    if (mw && !mw.isDestroyed()) {
+      try {
+        mw.webContents.send('session:archived', session);
+      } catch (error) {
+        console.error('[Main] Failed to send session:archived event:', error);
+      }
+    }
+  });
+
   sessionManager.on('sessions-loaded', (sessions) => {
     const mw = getMainWindow();
     if (mw && !mw.isDestroyed()) {

@@ -271,6 +271,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.on('session:deleted', wrappedCallback);
       return () => ipcRenderer.removeListener('session:deleted', wrappedCallback);
     },
+    onSessionArchived: (callback: (session: any) => void) => {
+      const wrappedCallback = (_event: any, session: any) => callback(session);
+      ipcRenderer.on('session:archived', wrappedCallback);
+      return () => ipcRenderer.removeListener('session:archived', wrappedCallback);
+    },
     onSessionsLoaded: (callback: (sessions: any[]) => void) => {
       const wrappedCallback = (_event: any, sessions: any[]) => callback(sessions);
       ipcRenderer.on('sessions:loaded', wrappedCallback);

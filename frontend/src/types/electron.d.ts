@@ -208,6 +208,7 @@ interface ElectronAPI {
     onSessionCreated: (callback: (session: any) => void) => () => void;
     onSessionUpdated: (callback: (session: any) => void) => () => void;
     onSessionDeleted: (callback: (session: any) => void) => () => void;
+    onSessionArchived: (callback: (session: any) => void) => () => void;
     onSessionsLoaded: (callback: (sessions: any[]) => void) => () => void;
     onSessionOutput: (callback: (output: any) => void) => () => void;
     onSessionLog: (callback: (data: any) => void) => () => void;
