@@ -630,7 +630,8 @@ EOF
           '**/.git/**', 
           '**/dist/**', 
           '**/build/**',
-          '**/worktrees/**' // Exclude worktree folders
+          '**/worktrees/**', // Exclude worktree folders
+          '**/.worktrees/**'
         ],
         nodir: false,
         dot: true,
@@ -645,7 +646,10 @@ EOF
           const relativePath = path.relative(searchDirectory, fullPath);
           
           // Skip worktree directories
-          if (relativePath.includes('worktrees/') || relativePath.startsWith('worktrees/')) {
+          if (
+            relativePath.includes('worktrees/') || relativePath.startsWith('worktrees/') ||
+            relativePath.includes('.worktrees/') || relativePath.startsWith('.worktrees/')
+          ) {
             return null;
           }
           

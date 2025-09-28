@@ -10,8 +10,8 @@ export function getCurrentWorktreeName(cwd: string): string | undefined {
   try {
     // Match worktrees directory followed by worktree name
     // Handles both Unix (/) and Windows (\) path separators
-    // For paths like "worktrees/feature/dev-mode-worktree-label", captures "feature/dev-mode-worktree-label"
-    const worktreeMatch = cwd.match(/worktrees[\/\\](.+)/);
+    // For paths like ".worktrees/feature/xxx" or "worktrees/feature/xxx", capture after folder
+    const worktreeMatch = cwd.match(/\.?worktrees[\/\\](.+)/);
     return worktreeMatch ? worktreeMatch[1] : undefined;
   } catch (error) {
     console.log('Could not extract worktree name:', error);

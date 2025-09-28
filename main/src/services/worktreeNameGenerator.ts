@@ -151,7 +151,7 @@ Respond with ONLY the session name, nothing else.`
   async generateUniqueWorktreeName(prompt: string): Promise<string> {
     const baseName = await this.generateWorktreeName(prompt);
     const gitRepoPath = this.configManager.getGitRepoPath();
-    const worktreesPath = path.join(gitRepoPath, 'worktrees');
+    const worktreesPath = path.join(gitRepoPath, '.worktrees');
     
     let uniqueName = baseName;
     let counter = 1;

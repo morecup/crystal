@@ -220,14 +220,14 @@ export default function ProjectSettings({ project, isOpen, onClose, onUpdate, on
                   type="text"
                   value={worktreeFolder}
                   onChange={(e) => setWorktreeFolder(e.target.value)}
-                  placeholder="worktrees"
+                  placeholder=".worktrees"
                   size="lg"
                   fullWidth
                 />
                 <div className="flex justify-between items-center">
                   <div className="flex items-center gap-2">
                     <span className="px-2 py-1 text-xs bg-surface-tertiary text-text-tertiary rounded">
-                      Default: worktrees/
+                      Default: .worktrees/
                     </span>
                   </div>
                   <Button

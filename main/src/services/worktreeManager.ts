@@ -27,9 +27,9 @@ export class WorktreeManager {
   }
 
   private getProjectPaths(projectPath: string, worktreeFolder?: string) {
-    const cacheKey = `${projectPath}:${worktreeFolder || 'worktrees'}`;
+    const cacheKey = `${projectPath}:${worktreeFolder || '.worktrees'}`;
     if (!this.projectsCache.has(cacheKey)) {
-      const folderName = worktreeFolder || 'worktrees';
+      const folderName = worktreeFolder || '.worktrees';
       let baseDir: string;
       
       // Check if worktreeFolder is an absolute path

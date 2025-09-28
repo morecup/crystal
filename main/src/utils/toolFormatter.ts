@@ -83,7 +83,7 @@ function makePathsRelative(content: any, gitRepoPath?: string): string {
   return content.replace(pathRegex, (match: string) => {
     try {
       // Find the worktree path in the match
-      const worktreeMatch = match.match(/worktrees[\\/][^\\/]+/);
+      const worktreeMatch = match.match(/\.?worktrees[\\/][^\\/]+/);
       if (worktreeMatch) {
         // Extract everything after the worktree name
         const afterWorktree = match.substring(match.indexOf(worktreeMatch[0]) + worktreeMatch[0].length);
