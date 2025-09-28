@@ -264,6 +264,16 @@ export class TaskQueue {
         
         // Emit the session-created event BEFORE running build script so UI shows immediately
         sessionManager.emitSessionCreated(session);
+        
+        // If there's no prompt or tool type is 'none', nothing will start automatically.
+        // Avoid leaving the UI in 'initializing' state by marking as stopped.
+        if (!prompt || prompt.trim().length === 0 || (toolType && toolType === 'none')) {
+          try {
+            await sessionManager.updateSession(session.id, { status: 'stopped' });
+          } catch (e) {
+            console.warn('[TaskQueue] Failed to set session status to stopped for idle session:', e);
+          }
+        }
         console.log(`[TaskQueue] Emitted session-created event for session ${session.id}`);
         
         // Run build script after session is visible in UI
@@ -397,9 +407,21 @@ export class TaskQueue {
             }
           } else {
             console.log(`[TaskQueue] Tool type '${resolvedToolType}' selected - skipping automatic AI start for session ${session.id}`);
+            // Explicitly set to stopped so UI doesn't remain initializing
+            try {
+              await sessionManager.updateSession(session.id, { status: 'stopped' });
+            } catch (e) {
+              console.warn('[TaskQueue] Failed to set session status to stopped for toolType=none:', e);
+            }
           }
         } else {
           console.log(`[TaskQueue] No prompt provided for session ${session.id}, skipping AI initialization`);
+          // No prompt: ensure status is stopped
+          try {
+            await sessionManager.updateSession(session.id, { status: 'stopped' });
+          } catch (e) {
+            console.warn('[TaskQueue] Failed to set session status to stopped for no-prompt session:', e);
+          }
         }
 
         return { sessionId: session.id };
