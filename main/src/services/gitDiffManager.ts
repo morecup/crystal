@@ -1,4 +1,6 @@
 import { execSync } from '../utils/commandExecutor';
+import * as fs from 'fs';
+import * as path from 'path';
 import type { Logger } from '../utils/logger';
 
 export interface GitDiffStats {
@@ -460,24 +462,19 @@ export class GitDiffManager {
       if (untrackedFiles.length > 0) {
         let untrackedAdditions = 0;
         for (const file of untrackedFiles) {
-          // Skip invalid filenames
-          if (!file || file.trim().length === 0) {
-            continue;
-          }
-          
+          if (!file || file.trim().length === 0) continue;
           try {
             const cleanFile = file.trim();
-            const filePath = `${worktreePath}/${cleanFile}`;
-            const lines = execSync(`wc -l < "${filePath}"`, { 
-              encoding: 'utf8',
-              cwd: worktreePath
-            });
-            untrackedAdditions += parseInt(lines.trim()) || 0;
+            const filePath = path.join(worktreePath, cleanFile);
+            const content = fs.readFileSync(filePath, 'utf8');
+            // Count lines cross‑platform
+            const lineCount = content.length === 0 ? 0 : content.split(/\r?\n/).length;
+            untrackedAdditions += lineCount;
           } catch {
-            // Skip files that can't be counted
+            // Skip files that can't be read (e.g., binary)
           }
         }
-        
+
         return {
           additions: trackedStats.additions + untrackedAdditions,
           deletions: trackedStats.deletions,
@@ -574,11 +571,8 @@ export class GitDiffManager {
       
       try {
         const cleanFile = file.trim();
-        const filePath = `${worktreePath}/${cleanFile}`;
-        const fileContent = execSync(`cat "${filePath}"`, { 
-          encoding: 'utf8',
-          maxBuffer: 1024 * 1024 // 1MB max per file
-        });
+        const filePath = path.join(worktreePath, cleanFile);
+        const fileContent = fs.readFileSync(filePath, 'utf8');
         
         // Create a diff-like format for the new file
         diffOutput += `diff --git a/${cleanFile} b/${cleanFile}\n`;
@@ -588,7 +582,7 @@ export class GitDiffManager {
         diffOutput += `+++ b/${cleanFile}\n`;
         
         // Add the file content with '+' prefix for each line
-        const lines = fileContent.split('\n');
+        const lines = fileContent.split(/\r?\n/);
         if (lines.length > 0) {
           diffOutput += `@@ -0,0 +1,${lines.length} @@\n`;
           for (const line of lines) {
