@@ -7,6 +7,7 @@ import type { CreateSessionRequest } from '../types/session';
 import { getCrystalSubdirectory } from '../utils/crystalDirectory';
 import { convertDbFolderToFolder } from './folders';
 import { panelManager } from '../services/panelManager';
+import { cleanupSessionLogs } from './logs';
 import { 
   validateSessionExists, 
   validatePanelSessionOwnership, 
@@ -353,6 +354,46 @@ export function registerSessionHandlers(ipcMain: IpcMain, services: AppServices)
     } catch (error) {
       console.error('Failed to delete session:', error);
       return { success: false, error: 'Failed to delete session' };
+    }
+  });
+
+  // Permanently delete an archived session
+  ipcMain.handle('sessions:delete-permanent', async (_event, sessionId: string) => {
+    try {
+      const dbSession = databaseService.getSession(sessionId);
+      if (!dbSession) {
+        return { success: false, error: 'Session not found' };
+      }
+      if (!dbSession.archived) {
+        return { success: false, error: 'Session must be archived before permanent deletion' };
+      }
+
+      try {
+        await sessionManager.closeTerminalSession(sessionId);
+      } catch {}
+
+      try {
+        const artifactsDir = getCrystalSubdirectory('artifacts', sessionId);
+        if (existsSync(artifactsDir)) {
+          await fs.rm(artifactsDir, { recursive: true, force: true });
+        }
+      } catch {}
+
+      try {
+        cleanupSessionLogs(sessionId);
+      } catch {}
+
+      const ok = databaseService.deleteSession(sessionId);
+      if (!ok) {
+        return { success: false, error: 'Failed to delete session' };
+      }
+
+      // Notify renderer to update lists
+      sessionManager.emit('session-deleted', { id: sessionId });
+      return { success: true };
+    } catch (error) {
+      console.error('Failed to permanently delete session:', error);
+      return { success: false, error: 'Failed to permanently delete session' };
     }
   });
 

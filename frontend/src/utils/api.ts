@@ -48,6 +48,11 @@ export class API {
       return window.electronAPI.sessions.delete(sessionId);
     },
 
+    async deletePermanent(sessionId: string) {
+      if (!isElectron()) throw new Error('Electron API not available');
+      return window.electronAPI.sessions.deletePermanent(sessionId);
+    },
+
     async sendInput(sessionId: string, input: string) {
       if (!isElectron()) throw new Error('Electron API not available');
       return window.electronAPI.sessions.sendInput(sessionId, input);

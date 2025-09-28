@@ -1633,6 +1633,15 @@ export class DatabaseService {
     return result.changes > 0;
   }
 
+  /**
+   * Permanently delete a session and all related data.
+   * Relies on ON DELETE CASCADE constraints for dependent tables.
+   */
+  deleteSession(id: string): boolean {
+    const result = this.db.prepare('DELETE FROM sessions WHERE id = ?').run(id);
+    return result.changes > 0;
+  }
+
   // Session output operations
   addSessionOutput(sessionId: string, type: 'stdout' | 'stderr' | 'system' | 'json' | 'error', data: string): void {
     this.db.prepare(`

@@ -318,12 +318,11 @@ export function DraggableProjectTreeView() {
     };
     
     const handleSessionDeleted = (deletedSession: Session) => {
-      // Remove the deleted session from the appropriate project without reloading everything
+      // Remove the deleted session from the active projects list
       setProjectsWithSessions(prevProjects => 
         prevProjects.map(project => {
           const sessionIndex = project.sessions.findIndex(s => s.id === deletedSession.id);
           if (sessionIndex !== -1) {
-            // Remove the session from this project
             const updatedSessions = project.sessions.filter(s => s.id !== deletedSession.id);
             return {
               ...project,
@@ -333,6 +332,17 @@ export function DraggableProjectTreeView() {
           return project;
         })
       );
+
+      // Also remove from archived list if present
+      setArchivedProjectsWithSessions(prevProjects => {
+        const updated = prevProjects
+          .map(project => ({
+            ...project,
+            sessions: project.sessions.filter(s => s.id !== deletedSession.id)
+          }))
+          .filter(project => project.sessions.length > 0);
+        return updated;
+      });
     };
     
     // Handler for folder updates

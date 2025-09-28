@@ -5,7 +5,7 @@ import { StatusIndicator } from './StatusIndicator';
 import { GitStatusIndicator } from './GitStatusIndicator';
 import { ConfirmDialog } from './ConfirmDialog';
 import { API } from '../utils/api';
-import { Star, Archive } from 'lucide-react';
+import { Star, Archive, Trash2 } from 'lucide-react';
 import type { Session, GitStatus } from '../types/session';
 import { useContextMenu } from '../contexts/ContextMenuContext';
 import { IconButton } from './ui/IconButton';
@@ -30,6 +30,7 @@ export const SessionListItem = memo(function SessionListItem({ session, isNested
   const [gitStatus, setGitStatus] = useState<GitStatus | undefined>(session.gitStatus);
   const { menuState, openMenu, closeMenu, isMenuOpen } = useContextMenu();
   const [showArchiveConfirm, setShowArchiveConfirm] = useState(false);
+  const [showPermanentDeleteConfirm, setShowPermanentDeleteConfirm] = useState(false);
   const [gitStatusLoading, setGitStatusLoading] = useState(false);
   
   
@@ -308,6 +309,26 @@ export const SessionListItem = memo(function SessionListItem({ session, isNested
     handleDelete({ stopPropagation: () => {} } as React.MouseEvent);
   };
 
+  const handleConfirmPermanentDelete = useCallback(async () => {
+    addDeletingSessionId(session.id);
+    try {
+      const response = await API.sessions.deletePermanent(session.id);
+      if (!response.success) {
+        throw new Error(response.error || 'Failed to delete session permanently');
+      }
+      if (isActive) {
+        setActiveSession(null);
+      }
+    } catch (error) {
+      console.error('Error permanently deleting session:', error);
+      const message = error instanceof Error ? error.message : 'Failed to delete session';
+      alert(message);
+    } finally {
+      removeDeletingSessionId(session.id);
+      setShowPermanentDeleteConfirm(false);
+    }
+  }, [session.id, isActive, addDeletingSessionId, removeDeletingSessionId, setActiveSession]);
+
   const handleToggleFavorite = async (e: React.MouseEvent) => {
     e.stopPropagation();
     
@@ -491,6 +512,18 @@ export const SessionListItem = memo(function SessionListItem({ session, isNested
               </button>
             </>
           )}
+          {session.archived && (
+            <>
+              <div className="border-t border-border-primary my-1" />
+              <button
+                onClick={() => { closeMenu(); setShowPermanentDeleteConfirm(true); }}
+                disabled={isDeleting}
+                className="w-full text-left px-4 py-2 text-sm text-status-error hover:bg-surface-hover hover:text-status-error"
+              >
+                Delete Permanently
+              </button>
+            </>
+          )}
         </div>
       )}
       
@@ -503,6 +536,17 @@ export const SessionListItem = memo(function SessionListItem({ session, isNested
         confirmText="Archive"
         confirmButtonClass="bg-amber-600 hover:bg-amber-700 text-white"
         icon={<Archive className="w-6 h-6 text-amber-500 flex-shrink-0" />}
+      />
+
+      <ConfirmDialog
+        isOpen={showPermanentDeleteConfirm}
+        onClose={() => setShowPermanentDeleteConfirm(false)}
+        onConfirm={handleConfirmPermanentDelete}
+        title={`Delete Session Permanently`}
+        message={`Permanently delete session "${session.name}"? This will remove all history, outputs, panels, and logs. This action cannot be undone.`}
+        confirmText="Delete"
+        confirmButtonClass="bg-red-600 hover:bg-red-700 text-white"
+        icon={<Trash2 className="w-6 h-6 text-red-500 flex-shrink-0" />}
       />
     </>
   );
