@@ -725,9 +725,9 @@ export function CreateSessionDialog({ isOpen, onClose, projectName, projectId }:
                         const value = e.target.value;
                         setSessionName(value);
                         setFormData({ ...formData, worktreeTemplate: value });
-                      // Real-time validation
-                      const error = validateWorktreeName(value);
-                      setWorktreeError(error);
+                        // Real-time validation
+                        const error = validateWorktreeName(value);
+                        setWorktreeError(error);
                     }}
                     error={worktreeError || undefined}
                     placeholder={hasApiKey ? "Leave empty for AI-generated name" : "Enter a name for your session"}
