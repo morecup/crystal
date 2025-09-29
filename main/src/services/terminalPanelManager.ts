@@ -5,6 +5,7 @@ import { mainWindow } from '../index';
 import * as os from 'os';
 import * as path from 'path';
 import { getShellPath } from '../utils/shellPath';
+import { buildSpawnEnv } from '../utils/envUtils';
 import { ShellDetector } from '../utils/shellDetector';
 
 interface TerminalProcess {
@@ -39,21 +40,22 @@ export class TerminalPanelManager {
     const enhancedPath = isLinux ? (process.env.PATH || '') : getShellPath();
     
     // Create PTY process with enhanced environment
+    const env = buildSpawnEnv(process.env, {
+      PATH: enhancedPath,
+      TERM: 'xterm-256color',
+      COLORTERM: 'truecolor',
+      LANG: process.env.LANG || 'en_US.UTF-8',
+      WORKTREE_PATH: cwd,
+      CRYSTAL_SESSION_ID: panel.sessionId,
+      CRYSTAL_PANEL_ID: panel.id
+    });
+
     const ptyProcess = pty.spawn(shellInfo.path, shellInfo.args || [], {
       name: 'xterm-color',
       cols: 80,
       rows: 30,
       cwd: cwd,
-      env: {
-        ...process.env,
-        PATH: enhancedPath,
-        TERM: 'xterm-256color',
-        COLORTERM: 'truecolor',
-        LANG: process.env.LANG || 'en_US.UTF-8',
-        WORKTREE_PATH: cwd,
-        CRYSTAL_SESSION_ID: panel.sessionId,
-        CRYSTAL_PANEL_ID: panel.id
-      }
+      env
     });
     
     // Create terminal process object

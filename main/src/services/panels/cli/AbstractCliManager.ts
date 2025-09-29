@@ -505,12 +505,16 @@ export abstract class AbstractCliManager extends EventEmitter {
           await new Promise(resolve => setTimeout(resolve, 500));
         }
 
+        // Sanitize env to avoid Windows case-duplicate variables (e.g., PATH/Path)
+        const { buildSpawnEnv } = await import('../../../utils/envUtils');
+        const safeEnv = buildSpawnEnv(process.env, env);
+
         ptyProcess = pty.spawn(command, args, {
           name: 'xterm-color',
           cols: 80,
           rows: 30,
           cwd,
-          env
+          env: safeEnv
         });
 
         const spawnTime = Date.now() - startTime;

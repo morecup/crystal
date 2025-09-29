@@ -5,6 +5,7 @@ import { ShellDetector } from '../utils/shellDetector';
 import * as os from 'os';
 import { exec } from 'child_process';
 import { promisify } from 'util';
+import { buildSpawnEnv } from '../utils/envUtils';
 
 interface TerminalSession {
   pty: pty.IPty;
@@ -37,19 +38,20 @@ export class TerminalSessionManager extends EventEmitter {
     console.log(`Using shell: ${shellInfo.path} (${shellInfo.name})`);
     
     // Create a new PTY instance with proper terminal settings
+    const env = buildSpawnEnv(process.env, {
+      PATH: shellPath,
+      WORKTREE_PATH: worktreePath,
+      TERM: 'xterm-256color',
+      COLORTERM: 'truecolor',
+      LANG: process.env.LANG || 'en_US.UTF-8',
+    });
+
     const ptyProcess = pty.spawn(shellInfo.path, shellInfo.args || [], {
       name: 'xterm-256color',  // Better terminal emulation
       cwd: worktreePath,
       cols: 80,
       rows: 24,
-      env: {
-        ...process.env,
-        PATH: shellPath,
-        WORKTREE_PATH: worktreePath,
-        TERM: 'xterm-256color',  // Ensure TERM is set for color support
-        COLORTERM: 'truecolor',  // Enable 24-bit color
-        LANG: process.env.LANG || 'en_US.UTF-8',  // Set locale for proper character handling
-      },
+      env,
     });
 
     // Store the session
