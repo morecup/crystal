@@ -125,7 +125,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({ panel, isActive })
             navigator.clipboard.readText()
               .then(text => {
                 if (text && terminal && !disposed) {
-                  terminal.write(text);
+                  terminal.paste(text);
                   console.log('[TerminalPanel] Text pasted from clipboard:', text.substring(0, 50) + '...');
                   // 显示粘贴成功提示
                   setNotification({ message: '已粘贴', type: 'paste' });
