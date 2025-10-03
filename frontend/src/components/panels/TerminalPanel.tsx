@@ -12,6 +12,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({ panel, isActive })
   const terminalRef = useRef<HTMLDivElement>(null);
   const xtermRef = useRef<Terminal | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
+  const isActiveRef = useRef(isActive);
   const [isInitialized, setIsInitialized] = useState(false);
   const [initError, setInitError] = useState<string | null>(null);
   const [notification, setNotification] = useState<{ message: string; type: 'copy' | 'paste' | 'commit' | 'error' } | null>(null);
@@ -27,6 +28,11 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({ panel, isActive })
   } else {
     console.error('[TerminalPanel] No session context available');
   }
+
+  // Keep latest active flag for non-react callbacks
+  useEffect(() => {
+    isActiveRef.current = isActive;
+  }, [isActive]);
 
   // Initialize terminal only once when component first mounts
   // Keep it alive even when switching tabs
@@ -145,8 +151,19 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({ panel, isActive })
           console.log('[TerminalPanel] Opening terminal in DOM element:', terminalRef.current);
           terminal.open(terminalRef.current);
           console.log('[TerminalPanel] Terminal opened in DOM');
-          fitAddon.fit();
-          console.log('[TerminalPanel] FitAddon fitted');
+
+          // Only fit when the panel is visible and has non-zero size
+          const el = terminalRef.current;
+          const hasSize = el && el.offsetWidth > 0 && el.offsetHeight > 0;
+          if (hasSize && isActiveRef.current && fitAddon) {
+            // Fit first, then compute and send exact cols/rows
+            fitAddon.fit();
+            const dimensions = fitAddon.proposeDimensions();
+            if (dimensions && dimensions.cols > 0 && dimensions.rows > 0) {
+              window.electronAPI.invoke('terminal:resize', panel.id, dimensions.cols, dimensions.rows);
+              console.log('[TerminalPanel] FitAddon fitted with', dimensions.cols, 'x', dimensions.rows);
+            }
+          }
           
           // 添加右键菜单事件监听器
           terminalRef.current.addEventListener('contextmenu', handleContextMenu);
@@ -160,13 +177,12 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({ panel, isActive })
           const outputHandler = (data: any) => {
             // Check if this is panel terminal output (has panelId) vs session terminal output (has sessionId)
             if ('panelId' in data && data.panelId && 'output' in data) {
-              console.log('[TerminalPanel] Received panel output for:', data.panelId, 'Current panel:', panel.id);
+              // console.log('[TerminalPanel] Received panel output for:', data.panelId, 'Current panel:', panel.id);
               if (data.panelId === panel.id && terminal && !disposed) {
-                console.log('[TerminalPanel] Writing to terminal:', data.output.substring(0, 50) + '...');
                 terminal.write(data.output);
               }
             }
-            // Ignore session terminal output (has sessionId instead of panelId)
+            // Ignore session terminal output
           };
 
           const unsubscribeOutput = window.electronAPI.events.onTerminalOutput(outputHandler);
@@ -179,12 +195,16 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({ panel, isActive })
 
           // Handle resize
           const resizeObserver = new ResizeObserver(() => {
-            if (fitAddon && !disposed) {
-              fitAddon.fit();
-              const dimensions = fitAddon.proposeDimensions();
-              if (dimensions) {
-                window.electronAPI.invoke('terminal:resize', panel.id, dimensions.cols, dimensions.rows);
-              }
+            if (!fitAddon || disposed) return;
+            const el2 = terminalRef.current;
+            if (!el2) return;
+            // Skip when not active or not visible (display: none) or zero size
+            if (!isActiveRef.current || el2.offsetWidth === 0 || el2.offsetHeight === 0) return;
+            // Fit first, then compute and send exact cols/rows
+            fitAddon.fit();
+            const dimensions = fitAddon.proposeDimensions();
+            if (dimensions && dimensions.cols > 0 && dimensions.rows > 0) {
+              window.electronAPI.invoke('terminal:resize', panel.id, dimensions.cols, dimensions.rows);
             }
           });
           
@@ -194,7 +214,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({ panel, isActive })
           return () => {
             disposed = true;
             resizeObserver.disconnect();
-            unsubscribeOutput(); // Use the unsubscribe function
+            unsubscribeOutput();
             inputDisposable.dispose();
             // 移除右键菜单事件监听器
             if (terminalRef.current) {
@@ -244,18 +264,19 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({ panel, isActive })
 
   // Handle visibility changes (resize when becoming visible)
   useEffect(() => {
-    if (isActive && fitAddonRef.current && xtermRef.current) {
+    if (isActive && fitAddonRef.current && xtermRef.current && terminalRef.current) {
       console.log('[TerminalPanel] Panel became active, fitting terminal');
       // Small delay to ensure DOM is ready
       setTimeout(() => {
-        if (fitAddonRef.current) {
-          fitAddonRef.current.fit();
-          const dimensions = fitAddonRef.current.proposeDimensions();
-          if (dimensions) {
-            window.electronAPI.invoke('terminal:resize', panel.id, dimensions.cols, dimensions.rows);
-          }
+        const el = terminalRef.current!;
+        if (!fitAddonRef.current || el.offsetWidth === 0 || el.offsetHeight === 0) return;
+        // Fit first, then compute and send exact cols/rows
+        fitAddonRef.current.fit();
+        const dimensions = fitAddonRef.current.proposeDimensions();
+        if (dimensions && dimensions.cols > 0 && dimensions.rows > 0) {
+          window.electronAPI.invoke('terminal:resize', panel.id, dimensions.cols, dimensions.rows);
         }
-      }, 50);
+      }, 80);
     }
   }, [isActive, panel.id]);
 
