@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react';
-import { DiffEditor, type DiffEditorProps, type MonacoDiffEditor } from '@monaco-editor/react';
+import { DiffEditor, loader, type DiffEditorProps, type MonacoDiffEditor } from '@monaco-editor/react';
 import { AlertCircle, FileText, Check, Loader2, Eye, Code } from 'lucide-react';
 import type { FileDiff } from '../../../types/diff';
 import { debounce } from '../../../utils/debounce';
@@ -26,6 +26,7 @@ export const MonacoDiffViewer: React.FC<MonacoDiffViewerProps> = ({
   isReadOnly = false
 }) => {
   const editorRef = useRef<MonacoDiffEditor | null>(null);
+  const [isMonacoConfigured, setIsMonacoConfigured] = useState(false);
   const [saveStatus, setSaveStatus] = useState<SaveStatus>('idle');
   const [saveError, setSaveError] = useState<string | null>(null);
   const [currentContent, setCurrentContent] = useState<string>(file.newValue || '');
@@ -40,6 +41,9 @@ export const MonacoDiffViewer: React.FC<MonacoDiffViewerProps> = ({
   const [viewMode, setViewMode] = useState<'diff' | 'preview' | 'split'>('diff');
   const [previewHeight, setPreviewHeight] = useState<number>(600); // Default preview height
   const previewRef = useRef<HTMLDivElement>(null);
+  const [initError, setInitError] = useState<string | null>(null);
+  const [configuredVsPath, setConfiguredVsPath] = useState<string | null>(null);
+  const [editorKey, setEditorKey] = useState<number>(0);
   
   // Check if this is a markdown file
   const isMarkdownFile = useMemo(() => {
@@ -53,19 +57,88 @@ export const MonacoDiffViewer: React.FC<MonacoDiffViewerProps> = ({
 
   // Delay mounting editor to ensure stability
   useEffect(() => {
-    // Reset states when important props change
+    // 在加载/切换文件时延迟挂载，但需等待 Monaco 路径配置完成
     setCanMountEditor(false);
     setIsEditorReady(false);
-    
+    if (!isMonacoConfigured) return;
     const timer = setTimeout(() => {
       setCanMountEditor(true);
     }, 100);
-    
     return () => {
       clearTimeout(timer);
-      // Don't reset canMountEditor on cleanup to avoid race conditions
     };
-  }, [file.path]); // Removed isReadOnly - we'll handle it dynamically
+  }, [file.path, isMonacoConfigured]); // Removed isReadOnly - we'll handle it dynamically
+
+  // 配置 Monaco loader 的 vs 路径（开发：/@fs；生产：打包资源）
+  useEffect(() => {
+    let disposed = false;
+    const configure = async () => {
+      try {
+        const isPackaged = !!(await (window as any).electronAPI?.isPackaged?.());
+        if (isPackaged) {
+          const vsPath = new URL('monaco/vs/', window.location.href).toString();
+          loader.config({ paths: { vs: vsPath } });
+          setConfiguredVsPath(vsPath);
+          console.log('Monaco loader configured for production:', vsPath);
+        } else if ((window as any).electronAPI?.invoke) {
+          const res = await (window as any).electronAPI.invoke('env:get-monaco-vs-path');
+          if (res?.success && res.path) {
+            const vsPath = `${window.location.origin}/${res.path}`;
+            loader.config({ paths: { vs: vsPath } });
+            setConfiguredVsPath(vsPath);
+            console.log('Monaco loader configured to local dev path:', vsPath);
+          } else {
+            console.warn('Failed to get local monaco vs path, fallback to CDN');
+          }
+        }
+      } catch (e) {
+        console.warn('Monaco loader configuration error:', e);
+      } finally {
+        if (!disposed) setIsMonacoConfigured(true);
+      }
+    };
+    configure();
+    return () => { disposed = true; };
+  }, []);
+
+  // 捕获初始化异常并提示
+  useEffect(() => {
+    const onUnhandledRejection = (e: PromiseRejectionEvent) => {
+      const msg = (e.reason && (e.reason.message || String(e.reason))) || 'Unknown error';
+      if (msg.toLowerCase().includes('monaco') || msg.includes('loader.js')) {
+        setInitError(`Monaco 初始化失败：${msg}`);
+      }
+    };
+    const onError = (e: ErrorEvent) => {
+      const src = `${e.filename || ''}`;
+      if (src.includes('/vs/') || (e.message || '').toLowerCase().includes('monaco')) {
+        setInitError(`Monaco 初始化失败：${e.message || 'Unknown error'}`);
+      }
+    };
+    window.addEventListener('unhandledrejection', onUnhandledRejection);
+    window.addEventListener('error', onError);
+    return () => {
+      window.removeEventListener('unhandledrejection', onUnhandledRejection);
+      window.removeEventListener('error', onError);
+    };
+  }, []);
+
+  // 超时保护
+  useEffect(() => {
+    if (!isMonacoConfigured || !canMountEditor || isEditorReady) return;
+    const t = window.setTimeout(() => {
+      if (!isEditorReady) setInitError('Monaco 初始化超时，可能被网络或策略阻止。');
+    }, 5000);
+    return () => window.clearTimeout(t);
+  }, [isMonacoConfigured, canMountEditor, isEditorReady]);
+
+  const handleRetryInit = () => {
+    setInitError(null);
+    setIsEditorReady(false);
+    setCanMountEditor(false);
+    setEditorKey(k => k + 1);
+    setTimeout(() => setCanMountEditor(true), 100);
+  };
 
   // Track when full content is loaded
   useEffect(() => {
@@ -682,6 +755,7 @@ export const MonacoDiffViewer: React.FC<MonacoDiffViewerProps> = ({
             {file.path && canMountEditor && (
               <MonacoErrorBoundary onReset={() => setIsEditorReady(false)}>
                 <DiffEditor
+                  key={editorKey}
                   height={editorHeight}
                   language={getLanguage(file.path)}
                   original={file.oldValue || ''}
@@ -715,6 +789,7 @@ export const MonacoDiffViewer: React.FC<MonacoDiffViewerProps> = ({
           {file.path && canMountEditor && (
             <MonacoErrorBoundary onReset={() => setIsEditorReady(false)}>
               <DiffEditor
+                key={editorKey}
                 height={editorHeight}
                 language={getLanguage(file.path)}
                 original={file.oldValue || ''}
@@ -725,6 +800,21 @@ export const MonacoDiffViewer: React.FC<MonacoDiffViewerProps> = ({
                 onMount={handleEditorDidMount}
               />
             </MonacoErrorBoundary>
+          )}
+          {initError && (
+            <div className="absolute inset-0 flex items-center justify-center bg-bg-primary/95 z-20 p-6">
+              <div className="max-w-xl text-center space-y-3">
+                <div className="text-lg font-semibold text-status-error">无法加载代码编辑器</div>
+                <div className="text-sm text-text-secondary">{initError}</div>
+                {configuredVsPath && (
+                  <div className="text-xs text-text-tertiary break-all">资源路径：{configuredVsPath}</div>
+                )}
+                <div className="text-xs text-text-tertiary">可尝试：检查网络/代理，禁用拦截插件，或重启应用。</div>
+                <div className="flex items-center justify-center gap-2 pt-2">
+                  <button onClick={handleRetryInit} className="px-3 py-1.5 rounded bg-interactive text-white text-sm">重试</button>
+                </div>
+              </div>
+            </div>
           )}
         </div>
       )}

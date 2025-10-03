@@ -1,4 +1,5 @@
 import { IpcMain, shell } from 'electron';
+import * as path from 'path';
 import type { AppServices } from './types';
 
 export function registerAppHandlers(ipcMain: IpcMain, services: AppServices): void {
@@ -97,4 +98,18 @@ export function registerAppHandlers(ipcMain: IpcMain, services: AppServices): vo
       return { success: false, error: error instanceof Error ? error.message : 'Failed to get all preferences' };
     }
   });
-} 
+
+  // 提供 Monaco 本地资源路径（开发环境：Vite /@fs）
+  ipcMain.handle('env:get-monaco-vs-path', () => {
+    try {
+      const monacoPkg = require.resolve('monaco-editor/package.json');
+      const monacoDir = path.dirname(monacoPkg);
+      const vsDir = path.join(monacoDir, 'min', 'vs');
+      const normalized = vsDir.replace(/\\/g, '/');
+      return { success: true, path: `@fs/${normalized}` };
+    } catch (error) {
+      console.error('Failed to resolve monaco-editor vs path:', error);
+      return { success: false, error: error instanceof Error ? error.message : 'Failed to resolve monaco path' };
+    }
+  });
+}

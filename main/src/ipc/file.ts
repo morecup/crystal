@@ -94,7 +94,9 @@ export function registerFileHandlers(ipcMain: IpcMain, services: AppServices): v
         throw new Error('File path is outside worktree');
       }
 
-      const content = await fs.readFile(resolvedFilePath, 'utf-8');
+      const raw = await fs.readFile(resolvedFilePath, 'utf-8');
+      // 统一行尾并去除 UTF-8 BOM，避免在 Windows/WSL 环境下出现“整文件变更”的假阳性
+      const content = raw.replace(/^\uFEFF/, '').replace(/\r\n/g, '\n');
       return { success: true, content };
     } catch (error) {
       console.error('Error reading file:', error);
@@ -384,9 +386,11 @@ EOF
         // Default to HEAD if no revision specified
         const revision = request.revision || 'HEAD';
         
-        // Use git show to get file content at specific revision
+        // Git 在 Windows 上要求 POSIX 分隔符，且含空格路径需加引号
+        const gitPath = normalizedPath.split(path.sep).join('/');
+
         const { stdout } = await execAsync(
-          `git show ${revision}:${normalizedPath}`,
+          `git show ${revision}:"${gitPath}"`,
           { 
             cwd: session.worktreePath,
             encoding: 'utf8',
@@ -394,7 +398,8 @@ EOF
           }
         );
 
-        return { success: true, content: stdout };
+        const sanitized = stdout.replace(/^\uFEFF/, '').replace(/\r\n/g, '\n');
+        return { success: true, content: sanitized };
       } catch (error: any) {
         // If file doesn't exist at that revision, return empty content
         if (error.message?.includes('does not exist') || error.message?.includes('bad file')) {
