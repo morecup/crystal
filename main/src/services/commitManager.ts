@@ -1,4 +1,5 @@
 import { EventEmitter } from 'events';
+import { existsSync } from 'fs';
 import type { Logger } from '../utils/logger';
 import { execSync } from '../utils/commandExecutor';
 import { buildGitCommitCommand } from '../utils/shellEscape';
@@ -9,9 +10,13 @@ import {
   DEFAULT_COMMIT_MODE_SETTINGS,
   DEFAULT_STRUCTURED_PROMPT_TEMPLATE,
 } from '../../../shared/types';
+import type { ConfigManager } from './configManager';
 
 export class CommitManager extends EventEmitter {
-  constructor(private logger?: Logger) {
+  constructor(
+    private logger?: Logger,
+    private configManager?: ConfigManager
+  ) {
     super();
   }
 
@@ -92,10 +97,12 @@ export class CommitManager extends EventEmitter {
 
       const fullMessage = prefix + commitMessage;
 
-      // For checkpoint mode, use a simple commit without the extra signature
-      // Escape the message properly for the shell
-      const escapedMessage = fullMessage.replace(/'/g, "'\\''");
-      const commitCommand = `git commit -m '${escapedMessage}' --no-verify`;
+      // Check if Crystal footer is enabled (default: true)
+      const config = this.configManager?.getConfig();
+      const enableCrystalFooter = config?.enableCrystalFooter !== false;
+
+      // Build commit command with Crystal footer if enabled
+      const commitCommand = buildGitCommitCommand(fullMessage, enableCrystalFooter) + ' --no-verify';
       const result = execSync(commitCommand, { cwd: worktreePath, encoding: 'utf8' });
 
       // Extract commit hash from output
@@ -106,9 +113,14 @@ export class CommitManager extends EventEmitter {
       this.emit('commit-created', { sessionId, commitHash, mode: 'checkpoint' });
 
       return { success: true, commitHash };
-    } catch (error: any) {
-      const errorMessage = error.stderr || error.stdout || error.message || 'Unknown error';
-      this.logger?.error(`Failed to create checkpoint commit:`, error);
+    } catch (error: unknown) {
+      const errorMessage = error instanceof Error 
+        ? error.message 
+        : (error as { stderr?: string; stdout?: string; message?: string })?.stderr 
+        || (error as { stderr?: string; stdout?: string; message?: string })?.stdout 
+        || (error as { stderr?: string; stdout?: string; message?: string })?.message 
+        || 'Unknown error';
+      this.logger?.error(`Failed to create checkpoint commit:`, error instanceof Error ? error : undefined);
       
       return {
         success: false,
@@ -160,9 +172,9 @@ export class CommitManager extends EventEmitter {
 
           // Continue polling
           setTimeout(checkForCommit, pollInterval);
-        } catch (error: any) {
+        } catch (error: unknown) {
           this.logger?.error(`Error checking for structured commit:`, error instanceof Error ? error : undefined);
-          resolve({ success: false, error: error.message });
+          resolve({ success: false, error: error instanceof Error ? error.message : String(error) });
         }
       };
 
@@ -195,7 +207,9 @@ export class CommitManager extends EventEmitter {
 
         // Commit with final message
         const commitMessage = options.commitMessage || 'Finalized session changes';
-        const commitCommand = buildGitCommitCommand(commitMessage);
+        const config = this.configManager?.getConfig();
+        const enableCrystalFooter = config?.enableCrystalFooter !== false;
+        const commitCommand = buildGitCommitCommand(commitMessage, enableCrystalFooter);
         execSync(commitCommand, { cwd: worktreePath });
 
         const commitHash = execSync('git log -1 --format=%H', {
@@ -217,9 +231,14 @@ export class CommitManager extends EventEmitter {
       }
 
       return { success: true };
-    } catch (error: any) {
-      const errorMessage = error.stderr || error.stdout || error.message || 'Unknown error';
-      this.logger?.error(`Failed to finalize session:`, error);
+    } catch (error: unknown) {
+      const errorMessage = error instanceof Error 
+        ? error.message 
+        : (error as { stderr?: string; stdout?: string; message?: string })?.stderr 
+        || (error as { stderr?: string; stdout?: string; message?: string })?.stdout 
+        || (error as { stderr?: string; stdout?: string; message?: string })?.message 
+        || 'Unknown error';
+      this.logger?.error(`Failed to finalize session:`, error instanceof Error ? error : undefined);
       
       return {
         success: false,
@@ -269,14 +288,14 @@ export class CommitManager extends EventEmitter {
   }
 
   private async checkPathExists(path: string): Promise<boolean> {
-    try {
-      execSync(`test -e "${path}"`, { encoding: 'utf8' });
-      return true;
-    } catch {
-      return false;
-    }
+    // Use fs.existsSync instead of shell command to avoid unnecessary error logs
+    return existsSync(path);
   }
 }
 
-// Export singleton instance
-export const commitManager = new CommitManager();
+// Export singleton instance - will be initialized with configManager
+export let commitManager: CommitManager;
+
+export function initializeCommitManager(configManager: ConfigManager, logger?: Logger) {
+  commitManager = new CommitManager(logger, configManager);
+}

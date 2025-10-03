@@ -1,12 +1,15 @@
 export interface AppConfig {
   verbose?: boolean;
   anthropicApiKey?: string;
+  openaiApiKey?: string;
   // Legacy fields for backward compatibility
   gitRepoPath?: string;
   systemPromptAppend?: string;
   runScript?: string[];
   // Custom claude executable path (for when it's not in PATH)
   claudeExecutablePath?: string;
+  // Custom codex executable path (for when it's not in PATH)  
+  codexExecutablePath?: string;
   // Permission mode for all sessions
   defaultPermissionMode?: 'approve' | 'ignore';
   // Default model for new sessions
@@ -53,12 +56,16 @@ export interface AppConfig {
       checkpointPrefix?: string;
     };
   };
+  // Crystal commit footer setting (enabled by default)
+  enableCrystalFooter?: boolean;
 }
 
 export interface UpdateConfigRequest {
   verbose?: boolean;
   anthropicApiKey?: string;
+  openaiApiKey?: string;
   claudeExecutablePath?: string;
+  codexExecutablePath?: string;
   systemPromptAppend?: string;
   defaultPermissionMode?: 'approve' | 'ignore';
   defaultModel?: string;
@@ -97,4 +104,5 @@ export interface UpdateConfigRequest {
       checkpointPrefix?: string;
     };
   };
+  disableCrystalFooter?: boolean;
 }

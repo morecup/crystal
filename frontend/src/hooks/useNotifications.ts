@@ -2,6 +2,13 @@ import { useEffect, useRef, useState } from 'react';
 import { useSessionStore } from '../stores/sessionStore';
 import { API } from '../utils/api';
 
+// Extend window interface for webkit audio context compatibility
+declare global {
+  interface Window {
+    webkitAudioContext?: typeof AudioContext;
+  }
+}
+
 interface NotificationSettings {
   enabled: boolean;
   playSound: boolean;
@@ -46,7 +53,12 @@ export function useNotifications() {
     
     try {
       // Create a simple notification sound using Web Audio API
-      const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+      const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+      if (!AudioContextClass) {
+        console.warn('AudioContext not supported');
+        return;
+      }
+      const audioContext = new AudioContextClass();
       const oscillator = audioContext.createOscillator();
       const gainNode = audioContext.createGain();
       
@@ -114,7 +126,6 @@ export function useNotifications() {
     // If this is the initial load (prevSessions is empty and we have sessions),
     // just update the ref without triggering notifications
     if (!initialLoadComplete.current && prevSessions.length === 0 && sessions.length > 0) {
-      console.log('[useNotifications] Initial session load detected, skipping notifications for', sessions.length, 'sessions');
       prevSessionsRef.current = sessions;
       initialLoadComplete.current = true;
       return;

@@ -1,5 +1,5 @@
 import { v4 as uuidv4 } from 'uuid';
-import { ToolPanel, CreatePanelRequest, PanelEventType, ToolPanelState, ToolPanelMetadata, ToolPanelType } from '../../../shared/types/panels';
+import { ToolPanel, CreatePanelRequest, PanelEventType, ToolPanelState, ToolPanelMetadata, ToolPanelType, LogsPanelState } from '../../../shared/types/panels';
 import { databaseService } from './database';
 import { panelEventBus } from './panelEventBus';
 import { mainWindow } from '../index';
@@ -17,6 +17,29 @@ export class PanelManager {
     // This will be called on app startup to restore panel state
     // But we don't start any processes - that happens lazily
     console.log('[PanelManager] Loading panels from database...');
+    
+    // Load all panels from database
+    const allPanels = databaseService.getAllPanels();
+    
+    // Clean up any stale running states in logs panels
+    allPanels.forEach(panel => {
+      if (panel.type === 'logs' && panel.state?.customState) {
+        const logsState = panel.state.customState as LogsPanelState;
+        if (logsState.isRunning) {
+          // Reset the running state since processes don't survive app restarts
+          logsState.isRunning = false;
+          // Also clear process-related fields
+          logsState.processId = undefined;
+          logsState.endTime = new Date().toISOString();
+          // Update in database
+          databaseService.updatePanel(panel.id, {
+            state: panel.state
+          });
+        }
+      }
+      // Cache the panel
+      this.panels.set(panel.id, panel);
+    });
   }
   
   async createPanel(request: CreatePanelRequest): Promise<ToolPanel> {
@@ -61,6 +84,10 @@ export class PanelManager {
         state: panel.state,
         metadata: panel.metadata
       });
+      
+      // Update the panel state to reflect it's now active
+      panel.state.isActive = true;
+      panel.metadata.lastActiveAt = new Date().toISOString();
       
       // Cache in memory
       this.panels.set(panelId, panel);
@@ -277,7 +304,7 @@ export class PanelManager {
     return panels.filter(p => p.type === type);
   }
   
-  async emitPanelEvent(panelId: string, eventType: PanelEventType, data: any): Promise<void> {
+  async emitPanelEvent(panelId: string, eventType: PanelEventType, data: unknown): Promise<void> {
     const panel = this.getPanel(panelId);
     if (!panel) {
       console.warn(`[PanelManager] Panel ${panelId} not found for event emission`);

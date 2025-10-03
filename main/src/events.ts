@@ -5,6 +5,7 @@ import type { VersionInfo } from './services/versionChecker';
 import { addSessionLog } from './ipc/logs';
 import { getCodexModelConfig } from '../../shared/types/models';
 import { panelManager } from './services/panelManager';
+import type { ToolPanel, CodexPanelState, ClaudePanelState } from '../../shared/types/panels';
 import { 
   validateSessionExists, 
   validateEventContext, 
@@ -12,6 +13,9 @@ import {
   logValidationFailure 
 } from './utils/sessionValidation';
 import type { AbstractCliManager } from './services/panels/cli/AbstractCliManager';
+import type { GitCommit } from './services/gitDiffManager';
+import type { Project } from './database/models';
+import type { GitStatus } from './types/session';
 
 export function setupEventListeners(services: AppServices, getMainWindow: () => BrowserWindow | null): void {
   const {
@@ -23,6 +27,7 @@ export function setupEventListeners(services: AppServices, getMainWindow: () => 
     gitStatusManager,
     worktreeManager,
     archiveProgressManager,
+    databaseService,
     logger
   } = services;
 
@@ -58,11 +63,6 @@ export function setupEventListeners(services: AppServices, getMainWindow: () => 
         return;
       }
 
-      if (panelId) {
-        console.log(`[Main] ${toolLabel} spawned for panel ${panelId} (session ${sessionId}), updating status to 'running'`);
-      } else {
-        console.log(`[Main] ${toolLabel} spawned for session ${sessionId}, updating status to 'running'`);
-      }
 
       await new Promise(resolve => setTimeout(resolve, 100));
 
@@ -72,13 +72,12 @@ export function setupEventListeners(services: AppServices, getMainWindow: () => 
       });
 
       const updatedSession = await sessionManager.getSession(sessionId);
-      console.log(`[Main] Session ${sessionId} status after update: ${updatedSession?.status}`);
 
       try {
         const session = await sessionManager.getSession(sessionId);
         if (session && session.worktreePath) {
           const panels = panelManager.getPanelsForSession(sessionId);
-          const targetPanels = panels.filter((p: any) => p.type === tool);
+          const targetPanels = panels.filter((p: ToolPanel) => p.type === tool);
 
           let promptMarkers;
           if (targetPanels.length > 0 && typeof sessionManager.getPanelPromptMarkers === 'function') {
@@ -110,11 +109,6 @@ export function setupEventListeners(services: AppServices, getMainWindow: () => 
       }
 
       const signalText = signal === null || signal === undefined ? 'null' : String(signal);
-      if (panelId) {
-        console.log(`[Main] ${toolLabel} exited for panel ${panelId} (session ${sessionId}) with code ${exitCode}, signal ${signalText}`);
-      } else {
-        console.log(`[Main] ${toolLabel} exited for session ${sessionId} with code ${exitCode}, signal ${signalText}`);
-      }
 
       if (exitCode !== null && exitCode !== undefined) {
         await sessionManager.setSessionExitCode(sessionId, exitCode);
@@ -124,14 +118,7 @@ export function setupEventListeners(services: AppServices, getMainWindow: () => 
       if (session) {
         const dbSession = sessionManager.getDbSession(sessionId);
         if (dbSession && dbSession.status !== 'completed') {
-          console.log(`[Main] Updating session ${sessionId} status to 'stopped'`);
           await sessionManager.updateSession(sessionId, { status: 'stopped' });
-        } else {
-          console.log(`[Main] Session ${sessionId} already marked as completed, preserving status`);
-          const updatedSession = sessionManager.getSession(sessionId);
-          if (updatedSession) {
-            console.log(`[Main] Session ${sessionId} final status: ${updatedSession.status}`);
-          }
         }
       }
 
@@ -166,7 +153,6 @@ export function setupEventListeners(services: AppServices, getMainWindow: () => 
     }
     
     // Auto-create AI panel for sessions with prompts
-    console.log(`[Events] Session ${session.id} created with prompt value:`, JSON.stringify(session.prompt), `Type: ${typeof session.prompt}, Length: ${session.prompt ? session.prompt.length : 'N/A'}`);
     if (session.prompt && typeof session.prompt === 'string' && session.prompt.trim().length > 0) {
       // Decide whether to create a Codex or Claude panel based on the explicit tool type when available
       const inferredToolType: 'claude' | 'codex' | 'none' = session.toolType
@@ -174,36 +160,59 @@ export function setupEventListeners(services: AppServices, getMainWindow: () => 
         : (session.model && getCodexModelConfig(session.model)) ? 'codex' : 'claude';
 
       if (inferredToolType === 'none') {
-        console.log(`[Events] Session ${session.id} configured with no default tool. Skipping automatic panel creation.`);
+        // Skip panel creation for sessions with no tool configured
       } else {
         const panelType = inferredToolType === 'codex' ? 'codex' : 'claude';
         const panelTitle = inferredToolType === 'codex' ? 'Codex' : 'Claude';
 
-        console.log(`[Events] Session ${session.id} has non-empty prompt, auto-creating ${panelType} panel`);
         try {
           // Prepare initial custom state for the panel
-          let customState: any = undefined;
+          let customState: CodexPanelState | ClaudePanelState | undefined = undefined;
           if (panelType === 'codex') {
-            const codexConfig = (session as any).codexConfig || {};
+            const codexConfig = session.codexConfig || {};
             customState = {
               codexConfig: {
                 model: codexConfig.model || 'auto',
-                modelProvider: codexConfig.modelProvider || 'openai',
                 thinkingLevel: codexConfig.thinkingLevel || 'medium',
                 sandboxMode: codexConfig.sandboxMode || 'workspace-write',
                 webSearch: codexConfig.webSearch || false
-              }
+              },
+              modelProvider: codexConfig.modelProvider || 'openai',
+              approvalPolicy: codexConfig.approvalPolicy || 'auto',
+              sandboxMode: codexConfig.sandboxMode || 'workspace-write',
+              webSearch: codexConfig.webSearch || false
             };
-            console.log(`[Events] Creating Codex panel with customState:`, customState);
+          } else if (panelType === 'claude') {
+            const claudeConfig = session.claudeConfig || {};
+            customState = {
+              permissionMode: claudeConfig.permissionMode || 'ignore',
+              model: claudeConfig.model || 'auto'
+            };
           }
           
           const panel = await panelManager.createPanel({
             sessionId: session.id,
-            type: panelType as any,
+            type: panelType,
             title: panelTitle,
             initialState: customState
           });
-          console.log(`[Events] Auto-created ${panelType} panel for session ${session.id}`);
+          
+          // Ensure the panel is set as active
+          await panelManager.setActivePanel(session.id, panel.id);
+          
+          // For Codex panels, also save the config to the settings column for persistence
+          if (panelType === 'codex' && customState && 'codexConfig' in customState && customState.codexConfig) {
+            databaseService.updatePanelSettings(panel.id, customState.codexConfig);
+          }
+
+          // For Claude panels, also save the config to the settings column for persistence
+          if (panelType === 'claude' && customState && 'model' in customState) {
+            const claudeState = customState as ClaudePanelState;
+            databaseService.updatePanelSettings(panel.id, {
+              model: claudeState.model,
+              permissionMode: claudeState.permissionMode
+            });
+          }
 
           // Register with the appropriate panel manager
           try {
@@ -211,7 +220,6 @@ export function setupEventListeners(services: AppServices, getMainWindow: () => 
               const { codexPanelManager } = require('./ipc/codexPanel');
               if (codexPanelManager) {
                 codexPanelManager.registerPanel(panel.id, session.id, panel.state.customState);
-                console.log(`[Events] Registered Codex panel ${panel.id} for session ${session.id}`);
               } else {
                 console.warn('[Events] CodexPanelManager not initialized yet; panel will register later');
               }
@@ -219,7 +227,6 @@ export function setupEventListeners(services: AppServices, getMainWindow: () => 
               const { claudePanelManager } = require('./ipc/claudePanel');
               if (claudePanelManager) {
                 claudePanelManager.registerPanel(panel.id, session.id, panel.state.customState);
-                console.log(`[Events] Registered Claude panel ${panel.id} for session ${session.id}`);
               } else {
                 console.warn('[Events] ClaudePanelManager not initialized yet; panel will register later');
               }
@@ -354,7 +361,7 @@ export function setupEventListeners(services: AppServices, getMainWindow: () => 
   });
 
   // Listen for project update events from sessionManager (since it extends EventEmitter)
-  sessionManager.on('project:updated', (project: any) => {
+  sessionManager.on('project:updated', (project: Project) => {
     console.log(`[Main] Project updated: ${project.id}`);
     const mw = getMainWindow();
     if (mw && !mw.isDestroyed()) {
@@ -363,7 +370,13 @@ export function setupEventListeners(services: AppServices, getMainWindow: () => 
   });
 
   // Listen to claudeCodeManager events
-  claudeCodeManager.on('output', async (output: any) => {
+  claudeCodeManager.on('output', async (output: { 
+    panelId: string; 
+    sessionId: string; 
+    type: 'json' | 'stdout' | 'stderr'; 
+    data: unknown; 
+    timestamp: Date 
+  }) => {
     // Validate the output has valid context
     const validation = output.panelId 
       ? validatePanelEventContext(output, output.panelId, output.sessionId)
@@ -377,6 +390,7 @@ export function setupEventListeners(services: AppServices, getMainWindow: () => 
     // Persist output: let ClaudePanelManager handle panel-based storage to avoid duplicates
     if (!output.panelId) {
       console.log(`[Events] Saving Claude output for session ${output.sessionId} (legacy mode)`);
+      
       sessionManager.addSessionOutput(output.sessionId, {
         type: output.type,
         data: output.data,
@@ -385,13 +399,13 @@ export function setupEventListeners(services: AppServices, getMainWindow: () => 
     }
 
     // Check if Claude is waiting for user input
-    if (output.type === 'json' && output.data.type === 'prompt') {
+    if (output.type === 'json' && typeof output.data === 'object' && output.data && 'type' in output.data && output.data.type === 'prompt') {
       console.log(`[Main] Claude is waiting for user input in session ${output.sessionId}`);
       await sessionManager.updateSession(output.sessionId, { status: 'waiting' });
     }
 
     // Check if Claude has completed (when it sends a result message)
-    if (output.type === 'json' && output.data.type === 'system' && output.data.subtype === 'result') {
+    if (output.type === 'json' && typeof output.data === 'object' && output.data && 'type' in output.data && output.data.type === 'system' && 'subtype' in output.data && output.data.subtype === 'result') {
       console.log(`[Main] Claude completed task in session ${output.sessionId}`);
       // Don't update status here - let the exit handler determine if it should be completed_unviewed
     }
@@ -417,11 +431,6 @@ export function setupEventListeners(services: AppServices, getMainWindow: () => 
       return; // Don't process invalid events
     }
 
-    if (panelId) {
-      console.log(`[Main] Claude Code spawned for panel ${panelId} (session ${sessionId}), updating status to 'running'`);
-    } else {
-      console.log(`[Main] Claude Code spawned for session ${sessionId}, updating status to 'running'`);
-    }
 
     // Add a small delay to ensure the session is fully initialized
     await new Promise(resolve => setTimeout(resolve, 100));
@@ -433,7 +442,6 @@ export function setupEventListeners(services: AppServices, getMainWindow: () => 
 
     // Verify the update was successful
     const updatedSession = await sessionManager.getSession(sessionId);
-    console.log(`[Main] Session ${sessionId} status after update: ${updatedSession?.status}`);
 
     // Start execution tracking
     try {
@@ -442,12 +450,11 @@ export function setupEventListeners(services: AppServices, getMainWindow: () => 
         // MIGRATION FIX: Get the latest prompt from prompt markers or use the session prompt
         // Check if session has Claude panels and use appropriate method
         const eventsPanels = panelManager.getPanelsForSession(sessionId);
-        const eventsClaudePanels = eventsPanels.filter((p: any) => p.type === 'claude');
+        const eventsClaudePanels = eventsPanels.filter((p: ToolPanel) => p.type === 'claude');
         
         let promptMarkers;
         if (eventsClaudePanels.length > 0 && sessionManager.getPanelPromptMarkers) {
           // Use panel-based method for migrated sessions
-          console.log(`[Events] Using panel-based prompt markers for session ${sessionId} with Claude panel ${eventsClaudePanels[0].id}`);
           promptMarkers = sessionManager.getPanelPromptMarkers(eventsClaudePanels[0].id);
         } else {
           // Use session-based method for non-migrated sessions
@@ -478,11 +485,6 @@ export function setupEventListeners(services: AppServices, getMainWindow: () => 
       return;
     }
 
-    if (panelId) {
-      console.log(`[Main] Claude Code exit summary triggered for panel ${panelId} (session ${sessionId}) with code ${exitCode}, signal ${signal}`);
-    } else {
-      console.log(`[Main] Claude Code exit summary triggered for session ${sessionId} with code ${exitCode}, signal ${signal}`);
-    }
 
     // Add commit information when session ends
     try {
@@ -524,7 +526,7 @@ export function setupEventListeners(services: AppServices, getMainWindow: () => 
         
         // Verbose commit logging removed - details are in error cases if needed
         
-        let commits: any[] = [];
+        let commits: GitCommit[] = [];
         try {
           commits = gitDiffManager.getCommitHistory(session.worktreePath, 10, mainBranch);
           // Commit count logging removed - shown in session summary
@@ -651,7 +653,7 @@ export function setupEventListeners(services: AppServices, getMainWindow: () => 
         
         // Verbose commit logging removed - details are in error cases if needed
         
-        let commits: any[] = [];
+        let commits: GitCommit[] = [];
         try {
           commits = gitDiffManager.getCommitHistory(session.worktreePath, 10, mainBranch);
           // Commit count logging removed - shown in session summary
@@ -752,7 +754,8 @@ export function setupEventListeners(services: AppServices, getMainWindow: () => 
   });
 
   // Listen to gitStatusManager events and broadcast to renderer
-  gitStatusManager.on('git-status-updated', (sessionId: string, gitStatus: any) => {
+  // Only broadcast for active sessions or recent updates to reduce EventEmitter load
+  gitStatusManager.on('git-status-updated', (sessionId: string, gitStatus: GitStatus) => {
     const mw = getMainWindow();
     if (mw && !mw.isDestroyed()) {
       try {

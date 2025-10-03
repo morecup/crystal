@@ -12,7 +12,7 @@ interface TerminalProcess {
   pty: pty.IPty;
   panelId: string;
   sessionId: string;
-  scrollbackBuffer: string[];
+  scrollbackBuffer: string;
   commandHistory: string[];
   currentCommand: string;
   lastActivity: Date;
@@ -24,13 +24,11 @@ export class TerminalPanelManager {
   
   async initializeTerminal(panel: ToolPanel, cwd: string): Promise<void> {
     if (this.terminals.has(panel.id)) {
-      console.log(`[TerminalPanelManager] Terminal ${panel.id} already initialized`);
       return;
     }
     
-    console.log(`[TerminalPanelManager] Initializing terminal ${panel.id} in ${cwd}`);
     
-    // Determine shell based on panel type
+    // 根据面板类型选择默认/WSL shell
     const shellInfo = panel.type === 'wsl'
       ? ShellDetector.getWSLShell()
       : ShellDetector.getDefaultShell();
@@ -63,7 +61,7 @@ export class TerminalPanelManager {
       pty: ptyProcess,
       panelId: panel.id,
       sessionId: panel.sessionId,
-      scrollbackBuffer: [],
+      scrollbackBuffer: '',
       commandHistory: [],
       currentCommand: '',
       lastActivity: new Date()
@@ -87,7 +85,6 @@ export class TerminalPanelManager {
     
     await panelManager.updatePanel(panel.id, { state });
     
-    console.log(`[TerminalPanelManager] Terminal ${panel.id} initialized successfully`);
   }
   
   private setupTerminalHandlers(terminal: TerminalProcess): void {
@@ -136,6 +133,7 @@ export class TerminalPanelManager {
       // Send output to frontend
       if (mainWindow) {
         mainWindow.webContents.send('terminal:output', {
+          sessionId: terminal.sessionId,
           panelId: terminal.panelId,
           output: data
         });
@@ -144,8 +142,6 @@ export class TerminalPanelManager {
     
     // Handle terminal exit
     terminal.pty.onExit((exitCode: { exitCode: number; signal?: number }) => {
-      console.log(`[TerminalPanelManager] Terminal ${terminal.panelId} exited with code ${exitCode.exitCode}`);
-      
       // Emit exit event
       panelManager.emitPanelEvent(
         terminal.panelId,
@@ -163,6 +159,7 @@ export class TerminalPanelManager {
       // Notify frontend
       if (mainWindow) {
         mainWindow.webContents.send('terminal:exited', {
+          sessionId: terminal.sessionId,
           panelId: terminal.panelId,
           exitCode: exitCode.exitCode
         });
@@ -171,13 +168,14 @@ export class TerminalPanelManager {
   }
   
   private addToScrollback(terminal: TerminalProcess, data: string): void {
-    // Split data into lines and add to buffer
-    const lines = data.split(/\r?\n/);
-    terminal.scrollbackBuffer.push(...lines);
+    // Add raw data to scrollback buffer
+    terminal.scrollbackBuffer += data;
     
-    // Trim buffer if it exceeds max size
-    if (terminal.scrollbackBuffer.length > this.MAX_SCROLLBACK_LINES) {
-      terminal.scrollbackBuffer = terminal.scrollbackBuffer.slice(-this.MAX_SCROLLBACK_LINES);
+    // Trim buffer if it exceeds max size (keep last ~500KB of data)
+    const maxBufferSize = 500000; // 500KB
+    if (terminal.scrollbackBuffer.length > maxBufferSize) {
+      // Keep the most recent data
+      terminal.scrollbackBuffer = terminal.scrollbackBuffer.slice(-maxBufferSize);
     }
   }
   
@@ -260,7 +258,7 @@ export class TerminalPanelManager {
       ...state.customState,
       isInitialized: true,
       cwd: cwd,
-      scrollbackBuffer: terminal.scrollbackBuffer.slice(-this.MAX_SCROLLBACK_LINES),
+      scrollbackBuffer: terminal.scrollbackBuffer,
       commandHistory: terminal.commandHistory.slice(-100), // Keep last 100 commands
       lastActivityTime: terminal.lastActivity.toISOString(),
       lastActiveCommand: terminal.currentCommand
@@ -268,7 +266,6 @@ export class TerminalPanelManager {
     
     await panelManager.updatePanel(panelId, { state });
     
-    console.log(`[TerminalPanelManager] Saved state for terminal ${panelId}`);
   }
   
   private async getProcessCwd(pid: number): Promise<string> {
@@ -288,7 +285,6 @@ export class TerminalPanelManager {
   
   async restoreTerminalState(panel: ToolPanel, state: TerminalPanelState): Promise<void> {
     if (!state.scrollbackBuffer || state.scrollbackBuffer.length === 0) {
-      console.log(`[TerminalPanelManager] No state to restore for terminal ${panel.id}`);
       return;
     }
     
@@ -298,8 +294,15 @@ export class TerminalPanelManager {
     const terminal = this.terminals.get(panel.id);
     if (!terminal) return;
     
-    // Restore scrollback buffer
-    terminal.scrollbackBuffer = state.scrollbackBuffer || [];
+    // Restore scrollback buffer (handle both string and array formats)
+    if (typeof state.scrollbackBuffer === 'string') {
+      terminal.scrollbackBuffer = state.scrollbackBuffer;
+    } else if (Array.isArray(state.scrollbackBuffer)) {
+      // Convert legacy array format to string
+      terminal.scrollbackBuffer = state.scrollbackBuffer.join('\n');
+    } else {
+      terminal.scrollbackBuffer = '';
+    }
     terminal.commandHistory = state.commandHistory || [];
     
     // Send restoration indicator to terminal
@@ -308,14 +311,12 @@ export class TerminalPanelManager {
     
     // Send scrollback to frontend
     if (mainWindow && state.scrollbackBuffer) {
-      const restoredOutput = state.scrollbackBuffer.join('\n');
       mainWindow.webContents.send('terminal:output', {
+        sessionId: panel.sessionId,
         panelId: panel.id,
-        output: restoredOutput + restorationMsg
+        output: state.scrollbackBuffer + restorationMsg
       });
     }
-    
-    console.log(`[TerminalPanelManager] Restored state for terminal ${panel.id}`);
   }
   
   getTerminalState(panelId: string): TerminalPanelState | null {
@@ -336,7 +337,6 @@ export class TerminalPanelManager {
   destroyTerminal(panelId: string): void {
     const terminal = this.terminals.get(panelId);
     if (!terminal) {
-      console.log(`[TerminalPanelManager] Terminal ${panelId} not found for destruction`);
       return;
     }
     
@@ -352,13 +352,9 @@ export class TerminalPanelManager {
     
     // Remove from map
     this.terminals.delete(panelId);
-    
-    console.log(`[TerminalPanelManager] Destroyed terminal ${panelId}`);
   }
   
   destroyAllTerminals(): void {
-    console.log(`[TerminalPanelManager] Destroying all ${this.terminals.size} terminals...`);
-    
     for (const [panelId, terminal] of this.terminals) {
       try {
         terminal.pty.kill();

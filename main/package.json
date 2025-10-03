@@ -1,6 +1,6 @@
 {
   "name": "main",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Electron main process for Claude Code Commander",
   "main": "dist/main/src/index.js",
   "type": "commonjs",
@@ -16,15 +16,15 @@
     "test:coverage": "vitest --coverage"
   },
   "dependencies": {
-    "@anthropic-ai/claude-code": "^1.0.87",
+    "@anthropic-ai/claude-code": "^2.0.0",
     "@anthropic-ai/sdk": "^0.60.0",
     "@homebridge/node-pty-prebuilt-multiarch": "^0.12.0",
     "@modelcontextprotocol/sdk": "^1.12.1",
     "better-sqlite3": "^11.7.0",
     "bull": "^4.16.3",
     "dotenv": "^16.4.7",
-    "electron-store": "^10.0.0",
-    "electron-updater": "^6.6.2",
+    "electron-store": "^11.0.0",
+    "electron-updater": "^6.6.8",
     "glob": "^11.0.0",
     "web-streams-polyfill": "^3.3.3"
   },
@@ -36,8 +36,8 @@
     "@typescript-eslint/eslint-plugin": "^8.19.0",
     "@typescript-eslint/parser": "^8.19.0",
     "@vitest/coverage-v8": "^2.1.8",
-    "electron": "^36.8.1",
-    "electron-rebuild": "^3.2.9",
+    "electron": "^37.6.0",
+    "@electron/rebuild": "^4.0.1",
     "eslint": "^9.17.0",
     "mkdirp": "^3.0.1",
     "rimraf": "^6.0.1",

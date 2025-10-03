@@ -10,8 +10,9 @@ import { EmptyState } from './EmptyState';
 import { LoadingSpinner } from './LoadingSpinner';
 import { API } from '../utils/api';
 import { debounce } from '../utils/debounce';
+import { throttle } from '../utils/performanceUtils';
 import type { Session } from '../types/session';
-import type { Project } from '../types/project';
+import type { Project, CreateProjectRequest } from '../types/project';
 import type { Folder } from '../types/folder';
 import { useContextMenu } from '../contexts/ContextMenuContext';
 import { Modal, ModalHeader, ModalBody, ModalFooter } from './ui/Modal';
@@ -51,7 +52,7 @@ export function DraggableProjectTreeView() {
   const [showProjectSettings, setShowProjectSettings] = useState(false);
   const [selectedProjectForSettings, setSelectedProjectForSettings] = useState<Project | null>(null);
   const [showAddProjectDialog, setShowAddProjectDialog] = useState(false);
-  const [newProject, setNewProject] = useState({ name: '', path: '', buildScript: '', runScript: '' });
+  const [newProject, setNewProject] = useState<CreateProjectRequest>({ name: '', path: '', buildScript: '', runScript: '' });
   const [showValidationErrors, setShowValidationErrors] = useState(false);
   const activeSessionId = useSessionStore((state) => state.activeSessionId);
   const { setActiveSession } = useSessionStore();
@@ -99,12 +100,9 @@ export function DraggableProjectTreeView() {
     const now = Date.now();
     const timeSinceLastRender = now - lastRenderTimeRef.current;
     
-    // Log if we're getting too many rapid re-renders (only in development)
+    // Monitor rapid re-renders (development debugging removed)
     if (process.env.NODE_ENV === 'development' && timeSinceLastRender < 100) {
-      console.warn('[DraggableProjectTreeView] Rapid re-render detected:', {
-        renderCount: renderCountRef.current,
-        timeSinceLastRender
-      });
+      // Rapid re-render detection - logging removed to reduce noise
     }
     
     lastRenderTimeRef.current = now;
@@ -195,8 +193,8 @@ export function DraggableProjectTreeView() {
     const handleSessionCreated = (newSession: Session) => {
       
       if (!newSession.projectId) {
-        console.warn('[DraggableProjectTreeView] Session created without projectId, reloading all');
-        loadProjectsWithSessions();
+        console.warn('[DraggableProjectTreeView] Session created without projectId, cannot add to tree');
+        // Instead of reloading everything, just skip this session
         return;
       }
       
@@ -206,7 +204,9 @@ export function DraggableProjectTreeView() {
         const folderExists = project?.folders?.some(f => f.id === newSession.folderId);
         
         if (!folderExists) {
-          // Reload to get the folder that might have been created
+          // If the folder doesn't exist in our local state, we need to refresh the data
+          // This can happen when multiple sessions are created quickly in a new folder
+          console.log('[DraggableProjectTreeView] Folder not found for new session, reloading project data');
           loadProjectsWithSessions();
           return;
         }
@@ -429,7 +429,6 @@ export function DraggableProjectTreeView() {
       
       // Listen for project updates
       const unsubscribeProjectUpdated = window.electronAPI.events.onProjectUpdated((updatedProject: Project) => {
-        
         // Update the project in our state
         setProjectsWithSessions(prevProjects => 
           prevProjects.map(project => {
@@ -445,6 +444,11 @@ export function DraggableProjectTreeView() {
             return project;
           })
         );
+        
+        // Emit a custom event for other components to listen to
+        window.dispatchEvent(new CustomEvent('project-updated', {
+          detail: updatedProject
+        }));
       });
       
       return () => {
@@ -462,6 +466,7 @@ export function DraggableProjectTreeView() {
         }
       };
     }
+    // Empty dependency array means this effect only runs once on mount
   }, []);
 
   // Add keyboard shortcut for quick session creation
@@ -648,11 +653,11 @@ export function DraggableProjectTreeView() {
           error: response.error || 'Unknown error occurred'
         });
       }
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error('Failed to rename folder:', error);
       showError({
         title: 'Failed to rename folder',
-        error: error.message || 'Unknown error occurred'
+        error: error instanceof Error ? error.message : 'Unknown error occurred'
       });
     } finally {
       setEditingFolderId(null);
@@ -771,11 +776,11 @@ export function DraggableProjectTreeView() {
                 throw new Error(`Failed to delete session "${session.name}": ${sessionResponse.error}`);
               }
               console.log(`Deleted session: ${session.name}`);
-            } catch (error: any) {
+            } catch (error: unknown) {
               console.error(`Error deleting session ${session.name}:`, error);
               showError({
                 title: `Failed to delete session "${session.name}"`,
-                error: error.message || 'Unknown error occurred'
+                error: error instanceof Error ? error.message : 'Unknown error occurred'
               });
               // Clear deleting state and stop the operation if a session fails to delete
               useSessionStore.getState().clearDeletingSessionIds();
@@ -829,11 +834,11 @@ export function DraggableProjectTreeView() {
             error: response.error || 'Unknown error occurred'
           });
         }
-      } catch (error: any) {
+      } catch (error: unknown) {
         console.error('Failed to delete folder:', error);
         showError({
           title: 'Failed to delete folder',
-          error: error.message || 'Unknown error occurred'
+          error: error instanceof Error ? error.message : 'Unknown error occurred'
         });
         // Clear deleting state in case of error
         useSessionStore.getState().clearDeletingSessionIds();
@@ -849,15 +854,22 @@ export function DraggableProjectTreeView() {
     navigateToProject(project.id);
   };
 
-  const handleRefreshProjectGitStatus = async (project: Project, e: React.MouseEvent) => {
-    e.stopPropagation();
-    
-    // Add to refreshing set
-    setRefreshingProjects(prev => new Set([...prev, project.id]));
-    
-    try {
-      // Start git status refresh for all sessions in this project (non-blocking)
-      const response = await window.electronAPI.invoke('projects:refresh-git-status', project.id);
+  // Throttled refresh function to prevent excessive git status requests
+  const handleRefreshProjectGitStatus = useCallback(
+    throttle(async (project: Project, e: React.MouseEvent) => {
+      e.stopPropagation();
+      
+      // Prevent multiple refresh operations on same project
+      if (refreshingProjects.has(project.id)) {
+        return;
+      }
+      
+      // Add to refreshing set
+      setRefreshingProjects(prev => new Set([...prev, project.id]));
+      
+      try {
+        // Start git status refresh for all sessions in this project (non-blocking)
+        const response = await window.electronAPI.invoke('projects:refresh-git-status', project.id);
       
       if (!response.success) {
         throw new Error(response.error || 'Failed to refresh git status');
@@ -890,11 +902,11 @@ export function DraggableProjectTreeView() {
           return newSet;
         });
       }
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error('Failed to refresh git status:', error);
       showError({
         title: 'Failed to refresh git status',
-        error: error.message || 'Unknown error occurred'
+        error: error instanceof Error ? error.message : 'Unknown error occurred'
       });
       // Remove from refreshing set on error
       setRefreshingProjects(prev => {
@@ -903,7 +915,9 @@ export function DraggableProjectTreeView() {
         return newSet;
       });
     }
-  };
+  }, 5000), // 5 second throttle
+  [refreshingProjects] // Dependencies for useCallback
+);
   
 
   const handleCreateSession = (project: Project) => {
@@ -916,11 +930,10 @@ export function DraggableProjectTreeView() {
     try {
       // Create a session with minimal configuration
       const response = await API.sessions.create({
-        prompt: undefined, // No initial prompt
+        prompt: '', // No initial prompt
         worktreeTemplate: 'untitled', // Simple name - backend will make it unique
         count: 1,
         permissionMode: 'ignore', // Use default permission mode
-        model: project.lastUsedModel || 'auto', // Use last used model or auto
         toolType: getCodexModelConfig(project.lastUsedModel || 'auto') ? 'codex' : 'claude',
         projectId: project.id,
         autoCommit: true,
@@ -968,7 +981,7 @@ export function DraggableProjectTreeView() {
     }
 
     try {
-      const response = await API.projects.create(newProject);
+      const response = await API.projects.create({ ...newProject, active: false });
 
       if (!response.success) {
         showError({
@@ -988,12 +1001,12 @@ export function DraggableProjectTreeView() {
       // Add the new project to the list without reloading everything
       const newProjectWithSessions = { ...response.data, sessions: [], folders: [] };
       setProjectsWithSessions(prev => [...prev, newProjectWithSessions]);
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error('Failed to create project:', error);
       showError({
         title: 'Failed to Create Project',
-        error: error.message || 'An error occurred while creating the project.',
-        details: error.stack || error.toString()
+        error: error instanceof Error ? error.message : 'An error occurred while creating the project.',
+        details: error instanceof Error ? error.stack : String(error)
       });
     }
   };
@@ -1038,11 +1051,11 @@ export function DraggableProjectTreeView() {
           error: response.error || 'Unknown error occurred'
         });
       }
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error('Failed to create folder:', error);
       showError({
         title: 'Failed to Create Folder',
-        error: error.message || 'Unknown error occurred'
+        error: error instanceof Error ? error.message : 'Unknown error occurred'
       });
     }
   };
@@ -1190,11 +1203,11 @@ export function DraggableProjectTreeView() {
               error: response.error || 'Unknown error occurred'
             });
           }
-        } catch (error: any) {
+        } catch (error: unknown) {
           console.error('Failed to reorder projects:', error);
           showError({
             title: 'Failed to reorder projects',
-            error: error.message || 'Unknown error occurred'
+            error: error instanceof Error ? error.message : 'Unknown error occurred'
           });
         }
       }
@@ -1229,11 +1242,11 @@ export function DraggableProjectTreeView() {
             error: response.error || 'Unknown error occurred'
           });
         }
-      } catch (error: any) {
+      } catch (error: unknown) {
         console.error('Failed to move folder:', error);
         showError({
           title: 'Failed to move folder',
-          error: error.message || 'Unknown error occurred'
+          error: error instanceof Error ? error.message : 'Unknown error occurred'
         });
       }
     }
@@ -1281,11 +1294,11 @@ export function DraggableProjectTreeView() {
               error: response.error || 'Unknown error occurred'
             });
           }
-        } catch (error: any) {
+        } catch (error: unknown) {
           console.error('Failed to reorder sessions:', error);
           showError({
             title: 'Failed to reorder sessions',
-            error: error.message || 'Unknown error occurred'
+            error: error instanceof Error ? error.message : 'Unknown error occurred'
           });
         }
       }
@@ -1349,11 +1362,11 @@ export function DraggableProjectTreeView() {
             error: response.error || 'Unknown error occurred'
           });
         }
-      } catch (error: any) {
+      } catch (error: unknown) {
         console.error('Failed to move session:', error);
         showError({
           title: 'Failed to move session',
-          error: error.message || 'Unknown error occurred'
+          error: error instanceof Error ? error.message : 'Unknown error occurred'
         });
       }
     } else if (dragState.type === 'folder' && dragState.folderId && dragState.folderId !== folder.id) {
@@ -1386,11 +1399,11 @@ export function DraggableProjectTreeView() {
             error: response.error || 'Unknown error occurred'
           });
         }
-      } catch (error: any) {
+      } catch (error: unknown) {
         console.error('Failed to move folder:', error);
         showError({
           title: 'Failed to move folder',
-          error: error.message || 'Unknown error occurred'
+          error: error instanceof Error ? error.message : 'Unknown error occurred'
         });
       }
     }
@@ -1423,11 +1436,11 @@ export function DraggableProjectTreeView() {
             error: response.error || 'Unknown error occurred'
           });
         }
-      } catch (error: any) {
+      } catch (error: unknown) {
         console.error('Failed to move session:', error);
         showError({
           title: 'Failed to move session',
-          error: error.message || 'Unknown error occurred'
+          error: error instanceof Error ? error.message : 'Unknown error occurred'
         });
       }
     }
@@ -2329,7 +2342,9 @@ export function DraggableProjectTreeView() {
           <button
             onClick={() => {
               closeMenu();
-              handleStartFolderEdit(menuState.payload);
+              if (menuState.payload) {
+                handleStartFolderEdit(menuState.payload as Folder);
+              }
             }}
             className="w-full text-left px-4 py-2 text-sm text-text-primary hover:bg-surface-hover hover:text-text-primary"
           >
@@ -2340,7 +2355,7 @@ export function DraggableProjectTreeView() {
               closeMenu();
               // Find the project that contains this folder
               const project = projectsWithSessions.find(p => 
-                p.folders?.some(f => f.id === menuState.payload.id)
+                p.folders?.some(f => f.id === menuState.payload?.id)
               );
               if (project) {
                 setSelectedProjectForCreate(project);
@@ -2356,12 +2371,12 @@ export function DraggableProjectTreeView() {
             onClick={() => {
               closeMenu();
               // Find the project that contains this folder or use projectId from payload
-              const projectId = menuState.payload.projectId || 
+              const projectId = (menuState.payload as Folder)?.projectId || 
                 projectsWithSessions.find(p => 
-                  p.folders?.some(f => f.id === menuState.payload.id)
+                  p.folders?.some(f => f.id === menuState.payload?.id)
                 )?.id;
               if (projectId) {
-                handleDeleteFolder(menuState.payload, projectId);
+                handleDeleteFolder(menuState.payload as Folder, projectId);
               }
             }}
             className="w-full text-left px-4 py-2 text-sm text-status-error hover:bg-surface-hover hover:text-status-error"

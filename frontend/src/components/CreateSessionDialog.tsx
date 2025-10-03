@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { API } from '../utils/api';
 import type { CreateSessionRequest } from '../types/session';
+import type { Project } from '../types/project';
 import { useErrorStore } from '../stores/errorStore';
 import { Sparkles, GitBranch, ChevronRight, ChevronDown, Brain, X, FileText, Paperclip, Code2, Settings2 } from 'lucide-react';
 import FilePathAutocomplete from './FilePathAutocomplete';
@@ -14,6 +15,13 @@ import { ClaudeCodeConfigComponent, type ClaudeCodeConfig } from './dialog/Claud
 import { CodexConfigComponent, type CodexConfig } from './dialog/CodexConfig';
 import { DEFAULT_CODEX_MODEL, type OpenAICodexModel } from '../../../shared/types/models';
 import { useSessionPreferencesStore } from '../stores/sessionPreferencesStore';
+
+// Interface for branch information
+interface BranchInfo {
+  name: string;
+  isCurrent: boolean;
+  hasWorktree: boolean;
+}
 
 const LARGE_TEXT_THRESHOLD = 5000;
 const TEXT_FILE_EXTENSIONS = /\.(?:txt|md|markdown|log|json|js|jsx|ts|tsx|py|rb|go|java|cs|c|cpp|h|hpp|rs|yml|yaml|sh|bash|zsh|html|css|scss|less|xml|csv)$/i;
@@ -66,17 +74,19 @@ interface CreateSessionDialogProps {
   onClose: () => void;
   projectName?: string;
   projectId?: number;
+  initialPrompt?: string;
+  initialSessionName?: string;
 }
 
-export function CreateSessionDialog({ isOpen, onClose, projectName, projectId }: CreateSessionDialogProps) {
-  const [sessionName, setSessionName] = useState<string>('');
+export function CreateSessionDialog({ isOpen, onClose, projectName, projectId, initialPrompt, initialSessionName }: CreateSessionDialogProps) {
+  const [sessionName, setSessionName] = useState<string>(initialSessionName || '');
   const [sessionCount, setSessionCount] = useState<number>(1);
   const previousNameRef = useRef<string>('');
   const [branchSelection, setBranchSelection] = useState<'new' | 'existing'>('new');
   const [existingBranchName, setExistingBranchName] = useState<string>('');
-  const [toolType, setToolType] = useState<'claude' | 'codex' | 'none'>('none');
+  const [toolType, setToolType] = useState<'claude' | 'codex' | 'none'>(initialPrompt ? 'claude' : 'none');
   const [claudeConfig, setClaudeConfig] = useState<ClaudeCodeConfig>({
-    prompt: '',
+    prompt: initialPrompt || '',
     model: 'auto',
     permissionMode: 'ignore',
     ultrathink: false,
@@ -84,7 +94,7 @@ export function CreateSessionDialog({ isOpen, onClose, projectName, projectId }:
     attachedTexts: []
   });
   const [codexConfig, setCodexConfig] = useState<CodexConfig>({
-    prompt: '',
+    prompt: initialPrompt || '',
     model: DEFAULT_CODEX_MODEL,
     modelProvider: 'openai',
     approvalPolicy: 'auto',  // Always 'auto' - manual mode not implemented
@@ -95,7 +105,7 @@ export function CreateSessionDialog({ isOpen, onClose, projectName, projectId }:
     attachedTexts: []
   });
   const [formData, setFormData] = useState<CreateSessionRequest>({
-    prompt: '',
+    prompt: initialPrompt || '',
     worktreeTemplate: '',
     count: 1,
     permissionMode: 'ignore'
@@ -196,17 +206,27 @@ export function CreateSessionDialog({ isOpen, onClose, projectName, projectId }:
   useEffect(() => {
     if (isOpen) {
       loadPreferences();
-      // Always clear session name and prompts when dialog opens
-      setSessionName('');
+      // Only clear session name if there's no initialSessionName
+      if (!initialSessionName) {
+        setSessionName('');
+      } else {
+        setSessionName(initialSessionName);
+      }
       setSessionCount(1);
       setBranchSelection('new');
       setExistingBranchName('');
       setFormData(prev => ({ ...prev, count: 1 }));
-      syncPromptAcrossConfigs('', 'none');
+      // Only clear prompts if there's no initialPrompt
+      if (!initialPrompt) {
+        syncPromptAcrossConfigs('', 'none');
+      } else {
+        // If we have an initialPrompt, sync it to all configs
+        syncPromptAcrossConfigs(initialPrompt, 'none');
+      }
       syncImageAttachments(() => []);
       syncTextAttachments(() => []);
     }
-  }, [isOpen, loadPreferences, syncPromptAcrossConfigs, syncImageAttachments, syncTextAttachments]);
+  }, [isOpen, loadPreferences, syncPromptAcrossConfigs, syncImageAttachments, syncTextAttachments, initialPrompt, initialSessionName]);
 
   useEffect(() => {
     if (!isOpen) {
@@ -223,7 +243,12 @@ export function CreateSessionDialog({ isOpen, onClose, projectName, projectId }:
   // Apply loaded preferences to state
   useEffect(() => {
     if (preferences) {
-      setToolType(preferences.toolType);
+      // If we have an initialPrompt, ensure tool type is not 'none'
+      if (initialPrompt && preferences.toolType === 'none') {
+        setToolType('claude');
+      } else {
+        setToolType(preferences.toolType);
+      }
       setClaudeConfig(prev => ({
         ...prev,
         model: preferences.claudeConfig.model,
@@ -243,7 +268,7 @@ export function CreateSessionDialog({ isOpen, onClose, projectName, projectId }:
       setCommitModeSettings(preferences.commitModeSettings);
       // Note: we don't apply baseBranch as it should be project-specific
     }
-  }, [preferences]);
+  }, [preferences, initialPrompt]);
 
   // Save preferences when certain settings change
   const savePreferences = async (updates: Partial<typeof preferences>) => {
@@ -266,7 +291,7 @@ export function CreateSessionDialog({ isOpen, onClose, projectName, projectId }:
           // Check if API key exists
           setHasApiKey(!!response.data?.anthropicApiKey);
         }
-      }).catch((err: any) => {
+      }).catch((err: Error) => {
         console.error('Failed to fetch config:', err);
       });
       
@@ -278,7 +303,7 @@ export function CreateSessionDialog({ isOpen, onClose, projectName, projectId }:
           if (!projectsResponse.success || !projectsResponse.data) {
             throw new Error('Failed to fetch projects');
           }
-          const project = projectsResponse.data.find((p: any) => p.id === projectId);
+          const project = projectsResponse.data.find((p: Project) => p.id === projectId);
           if (!project) {
             throw new Error('Project not found');
           }
@@ -292,7 +317,7 @@ export function CreateSessionDialog({ isOpen, onClose, projectName, projectId }:
           if (branchesResponse.success && branchesResponse.data) {
             setBranches(branchesResponse.data);
             // Set the current branch as default if available
-            const currentBranch = branchesResponse.data.find((b: any) => b.isCurrent);
+            const currentBranch = branchesResponse.data.find((b: BranchInfo) => b.isCurrent);
             if (currentBranch && !formData.baseBranch) {
               setFormData(prev => ({ ...prev, baseBranch: currentBranch.name }));
             }
@@ -301,7 +326,7 @@ export function CreateSessionDialog({ isOpen, onClose, projectName, projectId }:
           if (mainBranchResponse.success && mainBranchResponse.data) {
             // Main branch detected but not currently used in UI
           }
-        }).catch((err: any) => {
+        }).catch((err: Error) => {
           console.error('Failed to fetch branches:', err);
         }).finally(() => {
           setIsLoadingBranches(false);
@@ -646,7 +671,7 @@ export function CreateSessionDialog({ isOpen, onClose, projectName, projectId }:
       });
       const response = await API.sessions.create({
         prompt: finalPrompt || undefined,
-        worktreeTemplate: branchSelection === 'existing' ? (existingBranchName || undefined) : (sessionName || undefined), // existing 分支用分支名
+        worktreeTemplate: branchSelection === 'existing' ? (existingBranchName || undefined) : (sessionName || undefined), // existing ��֧�÷�֧��
         count: sessionCount,
         // Model is now managed at panel level, not session level
         toolType,
@@ -664,6 +689,11 @@ export function CreateSessionDialog({ isOpen, onClose, projectName, projectId }:
           sandboxMode: codexConfig.sandboxMode,
           webSearch: codexConfig.webSearch,
           thinkingLevel: codexConfig.thinkingLevel
+        } : undefined,
+        claudeConfig: toolType === 'claude' ? {
+          model: claudeConfig.model,
+          permissionMode: claudeConfig.permissionMode,
+          ultrathink: claudeConfig.ultrathink
         } : undefined
       });
       
@@ -682,12 +712,14 @@ export function CreateSessionDialog({ isOpen, onClose, projectName, projectId }:
       onClose();
       // Reset form - name and prompt are cleared, but other settings are preserved from preferences
       // This will be handled by the useEffect when the dialog opens again
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error('Error creating session:', error);
+      const errorMessage = error instanceof Error ? error.message : 'An error occurred while creating the session.';
+      const errorDetails = error instanceof Error ? (error.stack || error.toString()) : String(error);
       showError({
         title: 'Failed to Create Session',
-        error: error.message || 'An error occurred while creating the session.',
-        details: error.stack || error.toString()
+        error: errorMessage,
+        details: errorDetails
       });
     } finally {
       setIsSubmitting(false);
@@ -1171,7 +1203,7 @@ export function CreateSessionDialog({ isOpen, onClose, projectName, projectId }:
                       className="w-full px-3 py-2 border border-border-primary rounded-md focus:outline-none focus:ring-2 focus:ring-interactive text-text-primary bg-surface-secondary"
                       disabled={isLoadingBranches}
                     >
-                      <option value="" disabled>选择已有的本地分支</option>
+                      <option value="" disabled>选择已有的本地分�?/option>
                       {branches.map(b => (
                         <option key={b.name} value={b.name}>
                           {b.name}{b.hasWorktree ? ' (has worktree)' : ''}{b.isCurrent ? ' (current)' : ''}
@@ -1179,7 +1211,7 @@ export function CreateSessionDialog({ isOpen, onClose, projectName, projectId }:
                       ))}
                     </select>
                     <p className="text-xs text-text-tertiary mt-1">
-                      选择已有分支时，会话名会自动使用该分支名且不可编辑；若该分支已有 worktree 将直接复用。
+                      选择已有分支时，会话名会自动使用该分支名且不可编辑；若该分支已有 worktree 将直接复用�?
                     </p>
                   </div>
                 )}

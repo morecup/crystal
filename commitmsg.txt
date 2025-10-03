@@ -1,0 +1,7 @@
+feat(delete): 删除会话时增加分支删除选项（默认仅删本地分支）
+
+- ConfirmDialog 支持附加内容；会话删除/永久删除弹窗增加“删除本地/远程分支”复选项
+- IPC sessions:delete 与 sessions:delete-permanent 支持选项，并执行本地(-D)/远端(--delete)分支删除
+- preload 与前端 API 同步扩展可选参数
+
+Co-authored-by: factory-droid[bot] <138933559+factory-droid[bot]@users.noreply.github.com>

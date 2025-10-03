@@ -4,15 +4,57 @@ import { execSync } from '../utils/commandExecutor';
 import { buildGitCommitCommand, escapeShellArg } from '../utils/shellEscape';
 import { panelManager } from '../services/panelManager';
 import { panelEventBus } from '../services/panelEventBus';
-import { PanelEventType } from '../../../shared/types/panels';
+import { PanelEventType, ToolPanelType, PanelEvent } from '../../../shared/types/panels';
 import type { Session } from '../types/session';
 import type { GitCommit } from '../services/gitDiffManager';
+import type { ExecException } from 'child_process';
+
+// Extended type for git system virtual panels
+type SystemPanelType = ToolPanelType | 'git';
+
+// Interface for custom git errors that contain additional context
+interface GitError extends Error {
+  gitCommands?: string[];
+  gitOutput?: string;
+  workingDirectory?: string;
+  projectPath?: string;
+  originalError?: Error;
+}
+
+// Interface for process errors that have stdout/stderr properties
+interface ProcessError {
+  stdout?: string;
+  stderr?: string;
+  message?: string;
+}
+
+// Interface for generic error objects with git-related properties
+interface ErrorWithGitContext {
+  gitCommand?: string;
+  gitCommands?: string[];
+  gitOutput?: string;
+  workingDirectory?: string;
+  originalError?: Error;
+  [key: string]: unknown;
+}
+
+// Interface for raw commit data from worktreeManager
+interface RawCommitData {
+  hash: string;
+  message: string;
+  date: string | Date;
+  author?: string;
+  additions?: number;
+  deletions?: number;
+  filesChanged?: number;
+}
+
 
 export function registerGitHandlers(ipcMain: IpcMain, services: AppServices): void {
   const { sessionManager, gitDiffManager, worktreeManager, claudeCodeManager, gitStatusManager, databaseService, configManager } = services;
 
   // Helper function to emit git operation events to all sessions in a project
-  const emitGitOperationToProject = (sessionId: string, eventType: PanelEventType, message: string, details?: any) => {
+  const emitGitOperationToProject = (sessionId: string, eventType: PanelEventType, message: string, details?: Record<string, unknown>) => {
     try {
       const session = sessionManager.getSession(sessionId);
       if (!session) return;
@@ -20,14 +62,12 @@ export function registerGitHandlers(ipcMain: IpcMain, services: AppServices): vo
       const project = sessionManager.getProjectForSession(sessionId);
       if (!project) return;
       
-      console.log(`[Git] Emitting git operation for session ${sessionId} (${session.name})`);
-      
       // Create a virtual event as if it came from the git system
       const event = {
         type: eventType,
         source: {
           panelId: 'git-system', // Special panel ID for git operations
-          panelType: 'git' as any, // Virtual panel type
+          panelType: 'git' as SystemPanelType, // Virtual panel type
           sessionId: sessionId // The session that triggered the operation
         },
         data: {
@@ -40,11 +80,9 @@ export function registerGitHandlers(ipcMain: IpcMain, services: AppServices): vo
         timestamp: new Date().toISOString()
       };
       
-      console.log(`[Git] Event data - triggeringSessionId: ${event.data.triggeringSessionId}, projectId: ${event.data.projectId}`);
-      
       // Emit the event once to the panel event bus
       // All Claude panels that have subscribed will receive it
-      panelEventBus.emitPanelEvent(event);
+      panelEventBus.emitPanelEvent(event as PanelEvent);
     } catch (error) {
       console.error('[Git] Failed to emit git operation event:', error);
     }
@@ -132,7 +170,7 @@ export function registerGitHandlers(ipcMain: IpcMain, services: AppServices): vo
     if (useFallback) {
       const fallbackLimit = limit;
       const fallbackCommits = await worktreeManager.getLastCommits(session.worktreePath, fallbackLimit);
-      commits = fallbackCommits.map((commit: any) => ({
+      commits = fallbackCommits.map((commit: RawCommitData) => ({
         hash: commit.hash,
         message: commit.message,
         date: new Date(commit.date),
@@ -168,9 +206,6 @@ export function registerGitHandlers(ipcMain: IpcMain, services: AppServices): vo
       }
 
       const { commits, comparisonBranch, historySource, limitReached } = await getSessionCommitHistory(session, 50);
-
-      console.log(`[IPC:git] Getting git commits for session ${sessionId}`);
-      console.log(`[IPC:git] Found ${commits.length} commits (source: ${historySource}, comparison branch: ${comparisonBranch})`);
 
       // Transform git commits to execution format expected by frontend
       const executions = commits.map((commit, index) => ({
@@ -278,16 +313,16 @@ export function registerGitHandlers(ipcMain: IpcMain, services: AppServices): vo
         await refreshGitStatusForSession(sessionId);
         
         return { success: true };
-      } catch (commitError: any) {
+      } catch (commitError: unknown) {
         // Check if it's a pre-commit hook failure
-        if (commitError.stdout?.includes('pre-commit') || commitError.stderr?.includes('pre-commit')) {
+        if ((commitError && typeof commitError === 'object' && 'stdout' in commitError && (commitError as ProcessError).stdout?.includes('pre-commit')) || (commitError && typeof commitError === 'object' && 'stderr' in commitError && (commitError as ProcessError).stderr?.includes('pre-commit'))) {
           return { success: false, error: 'Pre-commit hooks failed. Please fix the issues and try again.' };
         }
         throw commitError;
       }
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error('Failed to commit changes:', error);
-      const errorMessage = error.message || error.stderr || 'Failed to commit changes';
+      const errorMessage = (error instanceof Error ? error.message : '') || (error && typeof error === 'object' && 'stderr' in error ? (error as ProcessError).stderr : '') || 'Failed to commit changes';
       return { success: false, error: errorMessage };
     }
   });
@@ -421,13 +456,6 @@ export function registerGitHandlers(ipcMain: IpcMain, services: AppServices): vo
   });
 
   ipcMain.handle('sessions:get-combined-diff', async (_event, sessionId: string, executionIds?: number[]) => {
-    console.log('[IPC] sessions:get-combined-diff called with:', {
-      sessionId,
-      executionIds,
-      executionIdsLength: executionIds?.length,
-      firstExecutionId: executionIds?.[0]
-    });
-    
     try {
       // Get session to find worktree path
       const session = await sessionManager.getSession(sessionId);
@@ -437,32 +465,21 @@ export function registerGitHandlers(ipcMain: IpcMain, services: AppServices): vo
 
       // Handle uncommitted changes request
       if (executionIds && executionIds.length === 1 && executionIds[0] === 0) {
-        console.log('Handling uncommitted changes request for session:', sessionId);
-        console.log('Session worktree path:', session.worktreePath);
-        
         // Verify the worktree exists and has uncommitted changes
         try {
           const status = execSync('git status --porcelain', { 
             cwd: session.worktreePath, 
             encoding: 'utf8' 
           });
-          console.log('Git status before getting diff:', status || '(no changes)');
         } catch (error) {
           console.error('Error checking git status:', error);
         }
         
         const uncommittedDiff = await gitDiffManager.captureWorkingDirectoryDiff(session.worktreePath);
-        console.log('Uncommitted diff result:', {
-          hasDiff: !!uncommittedDiff.diff,
-          diffLength: uncommittedDiff.diff?.length,
-          stats: uncommittedDiff.stats,
-          changedFiles: uncommittedDiff.changedFiles
-        });
         return { success: true, data: uncommittedDiff };
       }
 
       const { commits, comparisonBranch, historySource } = await getSessionCommitHistory(session, 50);
-      console.log(`[IPC] Combined diff commit history source: ${historySource}, comparison branch: ${comparisonBranch}, commits: ${commits.length}`);
 
       if (!commits.length) {
         return {
@@ -690,7 +707,6 @@ export function registerGitHandlers(ipcMain: IpcMain, services: AppServices): vo
   // Git rebase operations
   ipcMain.handle('sessions:check-rebase-conflicts', async (_event, sessionId: string) => {
     try {
-      console.log(`[IPC:git] Checking for rebase conflicts for session ${sessionId}`);
       const session = await sessionManager.getSession(sessionId);
       if (!session) {
         return { success: false, error: 'Session not found' };
@@ -716,7 +732,7 @@ export function registerGitHandlers(ipcMain: IpcMain, services: AppServices): vo
         success: true, 
         data: conflictInfo 
       };
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error(`[IPC:git] Failed to check for rebase conflicts:`, error);
       return {
         success: false,
@@ -726,40 +742,32 @@ export function registerGitHandlers(ipcMain: IpcMain, services: AppServices): vo
   });
 
   ipcMain.handle('sessions:rebase-main-into-worktree', async (_event, sessionId: string) => {
-    console.log(`[IPC:git] Starting rebase-main-into-worktree for session ${sessionId}`);
     try {
       const session = await sessionManager.getSession(sessionId);
       if (!session) {
-        console.log(`[IPC:git] Session ${sessionId} not found`);
         return { success: false, error: 'Session not found' };
       }
 
       if (!session.worktreePath) {
-        console.log(`[IPC:git] Session ${sessionId} has no worktree path`);
         return { success: false, error: 'Session has no worktree path' };
       }
 
       // Get the project to find the main branch
       const project = sessionManager.getProjectForSession(sessionId);
       if (!project) {
-        console.log(`[IPC:git] Project not found for session ${sessionId}`);
         return { success: false, error: 'Project not found for session' };
       }
 
-      console.log(`[IPC:git] Getting main branch for project at ${project.path}`);
       // Get the main branch from the project directory's current branch
       const mainBranch = await Promise.race([
         worktreeManager.getProjectMainBranch(project.path),
         new Promise((_, reject) => setTimeout(() => reject(new Error('getProjectMainBranch timeout')), 30000))
       ]) as string;
-      console.log(`[IPC:git] Main branch: ${mainBranch}`);
 
       // Check for conflicts before attempting rebase
-      console.log(`[IPC:git] Checking for potential conflicts before rebase`);
       const conflictCheck = await worktreeManager.checkForRebaseConflicts(session.worktreePath, mainBranch);
       
       if (conflictCheck.hasConflicts) {
-        console.log(`[IPC:git] Conflicts detected, aborting rebase`);
         
         // Build detailed error message
         let errorMessage = `Rebase would result in conflicts. Cannot proceed automatically.\n\n`;
@@ -826,12 +834,10 @@ export function registerGitHandlers(ipcMain: IpcMain, services: AppServices): vo
         mainBranch
       });
 
-      console.log(`[IPC:git] Starting rebase operation for session ${sessionId}`);
       await Promise.race([
         worktreeManager.rebaseMainIntoWorktree(session.worktreePath, mainBranch),
         new Promise((_, reject) => setTimeout(() => reject(new Error('rebaseMainIntoWorktree timeout')), 120000))
       ]);
-      console.log(`[IPC:git] Rebase operation completed for session ${sessionId}`);
 
       // Emit git operation completed event to all sessions in project
       const successMessage = `✓ Successfully rebased ${mainBranch} into worktree`;
@@ -840,28 +846,26 @@ export function registerGitHandlers(ipcMain: IpcMain, services: AppServices): vo
         mainBranch
       });
 
-      console.log(`[IPC:git] Refreshing git status for session ${sessionId}`);
-      // Refresh git status for this session after rebasing from main
+      // Update git status directly after rebasing from main (more efficient than refresh)
       // Don't let this block the response - run it in background
-      refreshGitStatusForSession(sessionId).catch(error => {
-        console.error(`[IPC:git] Failed to refresh git status for session ${sessionId}:`, error);
+      gitStatusManager.updateGitStatusAfterRebase(sessionId, 'from_main').catch(error => {
+        console.error(`[IPC:git] Failed to update git status for session ${sessionId}:`, error);
       });
 
-      console.log(`[IPC:git] Rebase operation successful for session ${sessionId}`);
       return { success: true, data: { message: `Successfully rebased ${mainBranch} into worktree` } };
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error(`[IPC:git] Failed to rebase main into worktree for session ${sessionId}:`, error);
 
       // Emit git operation failed event
-      const errorMessage = `✗ Rebase failed: ${error.message || 'Unknown error'}` +
-                          (error.gitOutput ? `\n\nGit output:\n${error.gitOutput}` : '');
+      const errorMessage = `✗ Rebase failed: ${error instanceof Error ? error.message : 'Unknown error'}` +
+                          (error && typeof error === 'object' && 'gitOutput' in error && (error as GitError).gitOutput ? `\n\nGit output:\n${(error as GitError).gitOutput}` : '');
       
       // Don't let this block the error response either
       try {
         emitGitOperationToProject(sessionId, 'git:operation_failed', errorMessage, {
           operation: 'rebase_from_main',
-          error: error.message,
-          gitOutput: error.gitOutput
+          error: error instanceof Error ? error.message : String(error),
+          gitOutput: error && typeof error === 'object' && 'gitOutput' in error ? (error as GitError).gitOutput : undefined
         });
       } catch (outputError) {
         console.error(`[IPC:git] Failed to emit git error event for session ${sessionId}:`, outputError);
@@ -872,10 +876,10 @@ export function registerGitHandlers(ipcMain: IpcMain, services: AppServices): vo
         success: false,
         error: error instanceof Error ? error.message : 'Failed to rebase main into worktree',
         gitError: {
-          command: error.gitCommand,
-          output: error.gitOutput,
-          workingDirectory: error.workingDirectory,
-          originalError: error.originalError?.message
+          command: error && typeof error === 'object' && 'gitCommand' in error ? (error as ErrorWithGitContext).gitCommand : undefined,
+          output: error && typeof error === 'object' && 'gitOutput' in error ? (error as ErrorWithGitContext).gitOutput : (error instanceof Error ? error.message : String(error)),
+          workingDirectory: error && typeof error === 'object' && 'workingDirectory' in error ? (error as ErrorWithGitContext).workingDirectory : undefined,
+          originalError: error && typeof error === 'object' && 'originalError' in error ? (error as ErrorWithGitContext).originalError?.message : undefined
         }
       };
     }
@@ -883,8 +887,6 @@ export function registerGitHandlers(ipcMain: IpcMain, services: AppServices): vo
 
   ipcMain.handle('sessions:abort-rebase-and-use-claude', async (_event, sessionId: string) => {
     try {
-      console.log(`[IPC:git] Starting abort-rebase-and-use-claude for session ${sessionId}`);
-      
       const session = await sessionManager.getSession(sessionId);
       if (!session) {
         return { success: false, error: 'Session not found' };
@@ -908,7 +910,6 @@ export function registerGitHandlers(ipcMain: IpcMain, services: AppServices): vo
       try {
         const statusOutput = execSync('git status --porcelain=v1', { cwd: session.worktreePath }).toString();
         if (statusOutput.includes('rebase')) {
-          console.log(`[IPC:git] Aborting existing rebase in ${session.worktreePath}`);
           await worktreeManager.abortRebase(session.worktreePath);
           
           // Emit git operation event about aborting the rebase
@@ -916,20 +917,15 @@ export function registerGitHandlers(ipcMain: IpcMain, services: AppServices): vo
           emitGitOperationToProject(sessionId, 'git:operation_completed', abortMessage, {
             operation: 'abort_rebase'
           });
-        } else {
-          console.log(`[IPC:git] No rebase in progress, proceeding to create Claude panel`);
         }
-      } catch (abortError: any) {
+      } catch (abortError: unknown) {
         // Not in a rebase state or already clean - that's fine
-        console.log('[IPC:git] No rebase to abort or already clean:', abortError.message);
       }
 
       // Create a new Claude panel to handle the rebase and conflicts
       const prompt = `Please rebase the local ${mainBranch} branch (not origin/${mainBranch}) into this branch and resolve all conflicts`;
       
       try {
-        console.log(`[IPC:git] Creating new Claude panel for session ${sessionId} to handle rebase`);
-        
         // Create a new Claude panel
         const panel = await panelManager.createPanel({
           sessionId: sessionId,
@@ -937,17 +933,13 @@ export function registerGitHandlers(ipcMain: IpcMain, services: AppServices): vo
           title: 'Claude - Resolve Conflicts'
         });
         
-        console.log(`[IPC:git] Created Claude panel ${panel.id} for session ${sessionId}`);
-        
         // Get the claudePanelManager from the claudePanel module
         const { claudePanelManager } = require('./claudePanel');
         
         // Register the panel with the Claude panel manager
-        console.log(`[IPC:git] Registering panel ${panel.id} with claudePanelManager`);
         claudePanelManager.registerPanel(panel.id, sessionId, panel.state.customState);
         
         // Start Claude in the new panel with the rebase prompt
-        console.log(`[IPC:git] Starting Claude in panel ${panel.id} with rebase prompt`);
         await claudePanelManager.startPanel(
           panel.id,
           session.worktreePath,
@@ -964,7 +956,6 @@ export function registerGitHandlers(ipcMain: IpcMain, services: AppServices): vo
           timestamp: new Date()
         });
         
-        console.log(`[IPC:git] Successfully created Claude panel to handle rebase`);
         return { 
           success: true, 
           data: { 
@@ -972,28 +963,28 @@ export function registerGitHandlers(ipcMain: IpcMain, services: AppServices): vo
             panelId: panel.id
           } 
         };
-      } catch (error: any) {
+      } catch (error: unknown) {
         console.error('[IPC:git] Failed to create Claude panel:', error);
         console.error('[IPC:git] Error details:', {
           sessionId,
           worktreePath: session.worktreePath,
-          errorMessage: error.message,
-          errorStack: error.stack
+          errorMessage: error instanceof Error ? error.message : String(error),
+          errorStack: error instanceof Error ? error.stack : undefined
         });
         
         // Provide more specific error messages
         let errorMessage = 'Failed to create Claude panel';
-        if (error.message?.includes('API key')) {
+        if (error instanceof Error && error.message?.includes('API key')) {
           errorMessage = 'Failed to create Claude panel: API key not configured';
-        } else if (error.message?.includes('not found')) {
+        } else if (error instanceof Error && error.message?.includes('not found')) {
           errorMessage = 'Failed to create Claude panel: Session or worktree not found';
-        } else if (error.message) {
+        } else if (error instanceof Error && error.message) {
           errorMessage = `Failed to create Claude panel: ${error.message}`;
         }
         
         return { success: false, error: errorMessage };
       }
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error('[IPC:git] Failed to abort rebase and use Claude:', error);
       return {
         success: false,
@@ -1003,33 +994,27 @@ export function registerGitHandlers(ipcMain: IpcMain, services: AppServices): vo
   });
 
   ipcMain.handle('sessions:squash-and-rebase-to-main', async (_event, sessionId: string, commitMessage: string) => {
-    console.log(`[IPC:git] Starting squash-and-rebase-to-main for session ${sessionId}`);
     try {
       const session = await sessionManager.getSession(sessionId);
       if (!session) {
-        console.log(`[IPC:git] Session ${sessionId} not found`);
         return { success: false, error: 'Session not found' };
       }
 
       if (!session.worktreePath) {
-        console.log(`[IPC:git] Session ${sessionId} has no worktree path`);
         return { success: false, error: 'Session has no worktree path' };
       }
 
       // Get the project to find the main branch and project path
       const project = sessionManager.getProjectForSession(sessionId);
       if (!project) {
-        console.log(`[IPC:git] Project not found for session ${sessionId}`);
         return { success: false, error: 'Project not found for session' };
       }
 
-      console.log(`[IPC:git] Getting main branch for project at ${project.path}`);
       // Get the effective main branch (override or auto-detected)
       const mainBranch = await Promise.race([
         worktreeManager.getProjectMainBranch(project.path),
         new Promise((_, reject) => setTimeout(() => reject(new Error('getProjectMainBranch timeout')), 30000))
       ]) as string;
-      console.log(`[IPC:git] Main branch: ${mainBranch}`);
 
       // Emit git operation started event to all sessions in project
       const startMessage = `🔄 GIT OPERATION\nSquashing commits and rebasing to ${mainBranch}...\nCommit message: ${commitMessage.split('\n')[0]}${commitMessage.includes('\n') ? '...' : ''}`;
@@ -1039,12 +1024,10 @@ export function registerGitHandlers(ipcMain: IpcMain, services: AppServices): vo
         commitMessage: commitMessage.split('\n')[0]
       });
 
-      console.log(`[IPC:git] Starting squash and rebase operation for session ${sessionId}`);
       await Promise.race([
         worktreeManager.squashAndRebaseWorktreeToMain(project.path, session.worktreePath, mainBranch, commitMessage),
         new Promise((_, reject) => setTimeout(() => reject(new Error('squashAndRebaseWorktreeToMain timeout')), 180000))
       ]);
-      console.log(`[IPC:git] Squash and rebase operation completed for session ${sessionId}`);
 
       // Emit git operation completed event to all sessions in project
       const successMessage = `✓ Successfully squashed and rebased worktree to ${mainBranch}`;
@@ -1053,45 +1036,44 @@ export function registerGitHandlers(ipcMain: IpcMain, services: AppServices): vo
         mainBranch
       });
 
-      console.log(`[IPC:git] Refreshing git status for project ${session.projectId}`);
-      // Refresh git status for ALL sessions in the project since main was updated
+      // Update git status for ALL sessions in the project since main was updated
       // Don't let this block the response - run it in background
       if (session.projectId !== undefined) {
-        refreshGitStatusForProject(session.projectId).catch(error => {
-          console.error(`[IPC:git] Failed to refresh git status for project ${session.projectId}:`, error);
+        gitStatusManager.updateProjectGitStatusAfterMainUpdate(session.projectId, sessionId).catch(error => {
+          console.error(`[IPC:git] Failed to update git status for project ${session.projectId}:`, error);
         });
       }
       
-      console.log(`[IPC:git] Squash and rebase operation successful for session ${sessionId}`);
       return { success: true, data: { message: `Successfully squashed and rebased worktree to ${mainBranch}` } };
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error(`[IPC:git] Failed to squash and rebase worktree to main for session ${sessionId}:`, error);
 
       // Emit git operation failed event
-      const errorMessage = `✗ Squash and rebase failed: ${error.message || 'Unknown error'}` +
-                          (error.gitOutput ? `\n\nGit output:\n${error.gitOutput}` : '');
+      const errorMessage = `✗ Squash and rebase failed: ${error instanceof Error ? error.message : 'Unknown error'}` +
+                          (error && typeof error === 'object' && 'gitOutput' in error && (error as GitError).gitOutput ? `\n\nGit output:\n${(error as GitError).gitOutput}` : '');
       
       // Don't let this block the error response either
       try {
         emitGitOperationToProject(sessionId, 'git:operation_failed', errorMessage, {
           operation: 'squash_and_rebase',
-          error: error.message,
-          gitOutput: error.gitOutput
+          error: error instanceof Error ? error.message : String(error),
+          gitOutput: error && typeof error === 'object' && 'gitOutput' in error ? (error as GitError).gitOutput : undefined
         });
       } catch (outputError) {
         console.error(`[IPC:git] Failed to emit git error event for session ${sessionId}:`, outputError);
       }
 
       // Pass detailed git error information to frontend
+      const gitError = error as GitError;
       return {
         success: false,
         error: error instanceof Error ? error.message : 'Failed to squash and rebase worktree to main',
         gitError: {
-          commands: error.gitCommands,
-          output: error.gitOutput,
-          workingDirectory: error.workingDirectory,
-          projectPath: error.projectPath,
-          originalError: error.originalError?.message
+          commands: gitError.gitCommands,
+          output: gitError.gitOutput || (error instanceof Error ? error.message : String(error)),
+          workingDirectory: gitError.workingDirectory,
+          projectPath: gitError.projectPath,
+          originalError: gitError.originalError?.message
         }
       };
     }
@@ -1138,13 +1120,23 @@ export function registerGitHandlers(ipcMain: IpcMain, services: AppServices): vo
         timestamp: new Date()
       });
 
+      // Update git status for ALL sessions in the project since main was updated
+      // Don't let this block the response - run it in background
+      if (session.projectId !== undefined) {
+        gitStatusManager.updateProjectGitStatusAfterMainUpdate(session.projectId, sessionId).catch(error => {
+          console.error(`[IPC:git] Failed to update git status for project ${session.projectId}:`, error);
+        });
+      }
+
       return { success: true, data: { message: `Successfully rebased worktree to ${mainBranch}` } };
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error('Failed to rebase worktree to main:', error);
 
+      const gitError = error as GitError;
+      
       // Add error message to session output
-      const errorMessage = `✗ Rebase failed: ${error.message || 'Unknown error'}` +
-                          (error.gitOutput ? `\n\nGit output:\n${error.gitOutput}` : '');
+      const errorMessage = `✗ Rebase failed: ${error instanceof Error ? error.message : 'Unknown error'}` +
+                          (gitError.gitOutput ? `\n\nGit output:\n${gitError.gitOutput}` : '');
       sessionManager.addSessionOutput(sessionId, {
         type: 'stderr',
         data: errorMessage,
@@ -1155,11 +1147,11 @@ export function registerGitHandlers(ipcMain: IpcMain, services: AppServices): vo
         success: false,
         error: error instanceof Error ? error.message : 'Failed to rebase worktree to main',
         gitError: {
-          commands: error.gitCommands,
-          output: error.gitOutput,
-          workingDirectory: error.workingDirectory,
-          projectPath: error.projectPath,
-          originalError: error.originalError?.message
+          commands: gitError.gitCommands,
+          output: gitError.gitOutput || (error instanceof Error ? error.message : String(error)),
+          workingDirectory: gitError.workingDirectory,
+          projectPath: gitError.projectPath,
+          originalError: gitError.originalError?.message
         }
       };
     }
@@ -1204,27 +1196,29 @@ export function registerGitHandlers(ipcMain: IpcMain, services: AppServices): vo
       }
 
       return { success: true, data: result };
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error('Failed to pull from remote:', error);
 
       // Emit git operation failed event
-      const errorMessage = `✗ Pull failed: ${error.message || 'Unknown error'}` +
-                          (error.gitOutput ? `\n\nGit output:\n${error.gitOutput}` : '');
+      const gitError = error as GitError;
+      
+      const errorMessage = `✗ Pull failed: ${error instanceof Error ? error.message : 'Unknown error'}` +
+                          (gitError.gitOutput ? `\n\nGit output:\n${gitError.gitOutput}` : '');
       emitGitOperationToProject(sessionId, 'git:operation_failed', errorMessage, {
         operation: 'pull',
-        error: error.message,
-        gitOutput: error.gitOutput
+        error: error instanceof Error ? error.message : String(error),
+        gitOutput: gitError.gitOutput
       });
 
       // Check if it's a merge conflict
-      if (error.message?.includes('CONFLICT') || error.gitOutput?.includes('CONFLICT')) {
+      if ((error instanceof Error && error.message?.includes('CONFLICT')) || (gitError.gitOutput?.includes('CONFLICT'))) {
         return {
           success: false,
           error: 'Merge conflicts detected. Please resolve conflicts manually or ask Claude to help.',
           isMergeConflict: true,
           gitError: {
-            output: error.gitOutput || error.message,
-            workingDirectory: error.workingDirectory || ''
+            output: gitError.gitOutput || (error instanceof Error ? error.message : String(error)),
+            workingDirectory: gitError.workingDirectory || ''
           }
         };
       }
@@ -1233,8 +1227,8 @@ export function registerGitHandlers(ipcMain: IpcMain, services: AppServices): vo
         success: false,
         error: error instanceof Error ? error.message : 'Failed to pull from remote',
         gitError: {
-          output: error.gitOutput || error.message,
-          workingDirectory: error.workingDirectory || ''
+          output: gitError.gitOutput || (error instanceof Error ? error.message : String(error)),
+          workingDirectory: gitError.workingDirectory || ''
         }
       };
     }
@@ -1283,24 +1277,26 @@ export function registerGitHandlers(ipcMain: IpcMain, services: AppServices): vo
       }
 
       return { success: true, data: result };
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error('Failed to push to remote:', error);
 
+      const gitError = error as GitError;
+      
       // Emit git operation failed event
-      const errorMessage = `✗ Push failed: ${error.message || 'Unknown error'}` +
-                          (error.gitOutput ? `\n\nGit output:\n${error.gitOutput}` : '');
+      const errorMessage = `✗ Push failed: ${error instanceof Error ? error.message : 'Unknown error'}` +
+                          (gitError.gitOutput ? `\n\nGit output:\n${gitError.gitOutput}` : '');
       emitGitOperationToProject(sessionId, 'git:operation_failed', errorMessage, {
         operation: 'push',
-        error: error.message,
-        gitOutput: error.gitOutput
+        error: error instanceof Error ? error.message : String(error),
+        gitOutput: gitError.gitOutput
       });
 
       return {
         success: false,
         error: error instanceof Error ? error.message : 'Failed to push to remote',
         gitError: {
-          output: error.gitOutput || error.message,
-          workingDirectory: error.workingDirectory || ''
+          output: gitError.gitOutput || (error instanceof Error ? error.message : String(error)),
+          workingDirectory: gitError.workingDirectory || ''
         }
       };
     }
@@ -1337,7 +1333,7 @@ export function registerGitHandlers(ipcMain: IpcMain, services: AppServices): vo
       }));
 
       return { success: true, data: executionDiffs };
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error('Failed to get last commits:', error);
       return {
         success: false,

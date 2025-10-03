@@ -2,12 +2,23 @@ import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useSessionStore } from '../stores/sessionStore';
 import { useTheme } from '../contexts/ThemeContext';
 import { useErrorStore } from '../stores/errorStore';
-import { API } from '../utils/api';
+import { API, GitErrorResponse } from '../utils/api';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
-import { Session, GitCommands, GitErrorDetails } from '../types/session';
+import { Session, GitCommands, GitErrorDetails, AttachedImage, AttachedText } from '../types/session';
 import { getTerminalTheme, getScriptTerminalTheme } from '../utils/terminalTheme';
 import { createVisibilityAwareInterval } from '../utils/performanceUtils';
+
+interface PromptMarker {
+  id: number;
+  session_id?: string;
+  panel_id?: string;
+  prompt_text: string;
+  output_index: number;
+  output_line?: number;
+  timestamp: string;
+  completion_timestamp?: string;
+}
 
 
 export const useSessionView = (
@@ -73,22 +84,11 @@ export const useSessionView = (
   
   // Debug function to check state health
   const debugState = useCallback(() => {
-    console.log('[DEBUG STATE]', {
-      loadingRef: loadingRef.current,
-      outputLoadState,
-      activeSessionId,
-      currentSessionIdForOutput,
-      formattedOutputLength: formattedOutput.length,
-      lastProcessedOutputLength: lastProcessedOutputLength.current,
-      terminalExists: !!terminalInstance.current,
-      abortController: !!abortControllerRef.current,
-      pendingTimeout: !!outputLoadTimeoutRef.current
-    });
+    // Debug state tracking removed - development debugging only
   }, [outputLoadState, activeSessionId, currentSessionIdForOutput, formattedOutput.length]);
   
   // Force reset stuck state
   const forceResetLoadingState = useCallback(() => {
-    console.log('[forceResetLoadingState] Forcing reset of all loading states');
     loadingRef.current = false;
     loadingSessionIdRef.current = null;
     setIsLoadingOutput(false);
@@ -105,7 +105,6 @@ export const useSessionView = (
 
 
   const loadOutputContent = useCallback(async (sessionId: string, retryCount = 0) => {
-    console.log(`[loadOutputContent] Called for session ${sessionId}, retry: ${retryCount}, loadingRef: ${loadingRef.current}`);
     
     // Cancel any existing load request
     if (abortControllerRef.current) {
@@ -121,13 +120,11 @@ export const useSessionView = (
     
     // Check if already loading this session
     if (loadingRef.current && loadingSessionIdRef.current === sessionId) {
-      console.log(`[loadOutputContent] Already loading session ${sessionId}, skipping`);
       return;
     }
     
     // If loading a different session, abort the old one
     if (loadingRef.current && loadingSessionIdRef.current !== sessionId) {
-      console.log(`[loadOutputContent] Currently loading session ${loadingSessionIdRef.current}, will switch to ${sessionId}`);
       loadingRef.current = false;
       loadingSessionIdRef.current = null;
     }
@@ -135,7 +132,6 @@ export const useSessionView = (
     // Check if session is still active
     const currentActiveSession = useSessionStore.getState().getActiveSession();
     if (!currentActiveSession || currentActiveSession.id !== sessionId) {
-      console.log(`[loadOutputContent] Session ${sessionId} not active, skipping`);
       return;
     }
 
@@ -159,7 +155,6 @@ export const useSessionView = (
       if (!response.success) {
         // Check if the session was archived (404 error)
         if (response.error && response.error.includes('not found')) {
-          console.log(`[loadOutputContent] Session ${sessionId} not found (possibly archived), aborting`);
           // CRITICAL: Reset loading state before returning
           loadingRef.current = false;
           loadingSessionIdRef.current = null;
@@ -176,12 +171,10 @@ export const useSessionView = (
       }
       
       const outputs = response.data || [];
-      console.log(`[loadOutputContent] Received ${outputs.length} outputs for session ${sessionId}`);
       
       // Check if still the active session after async operation
       const stillActiveSession = useSessionStore.getState().getActiveSession();
       if (!stillActiveSession || stillActiveSession.id !== sessionId) {
-        console.log(`[loadOutputContent] Session ${sessionId} no longer active, aborting`);
         // CRITICAL: Reset loading state before returning
         loadingRef.current = false;
         loadingSessionIdRef.current = null;
@@ -196,7 +189,6 @@ export const useSessionView = (
       }
       
       // Set outputs
-      console.log(`[loadOutputContent] Setting outputs in store for session ${sessionId}, count: ${outputs.length}`);
       useSessionStore.getState().setSessionOutputs(sessionId, outputs);
       
       // Outputs have been set
@@ -209,14 +201,12 @@ export const useSessionView = (
       
       // Reset continuing conversation flag after successfully loading output
       if (isContinuingConversationRef.current) {
-        console.log(`[loadOutputContent] Resetting continuing conversation flag after output load`);
         isContinuingConversationRef.current = false;
       }
       
       setLoadError(null);
-    } catch (error: any) {
-      if (error.name === 'AbortError') {
-        console.log(`[loadOutputContent] Request aborted for session ${sessionId}`);
+    } catch (error: unknown) {
+      if (error instanceof Error && error.name === 'AbortError') {
         // CRITICAL: Reset loading state before returning
         loadingRef.current = false;
         loadingSessionIdRef.current = null;
@@ -234,7 +224,6 @@ export const useSessionView = (
       
       if (retryCount < maxRetries) {
         const delay = 1000 * (retryCount + 1);
-        console.log(`[loadOutputContent] Retrying in ${delay}ms for session ${sessionId}`);
         // Reset loading state before retry
         loadingRef.current = false;
         loadingSessionIdRef.current = null;
@@ -248,7 +237,7 @@ export const useSessionView = (
       } else {
         setLoadError(error instanceof Error ? error.message : 'Failed to load output content');
         if (terminalInstance.current && lastProcessedOutputLength.current === 0) {
-          terminalInstance.current.writeln(`\r\n❌ Error loading output: ${error.message || 'Unknown error'}\r\n`);
+          terminalInstance.current.writeln(`\r\n❌ Error loading output: ${error instanceof Error ? error.message : 'Unknown error'}\r\n`);
         }
       }
     } finally {
@@ -317,7 +306,6 @@ export const useSessionView = (
     const currentSessionId = activeSession?.id || null;
     if (currentSessionId === previousSessionIdRef.current) return;
 
-    console.log(`[useSessionView] Session changed from ${previousSessionIdRef.current} to ${currentSessionId}`);
     previousSessionIdRef.current = currentSessionId;
     
     // Force reset any stuck loading state when switching sessions
@@ -331,14 +319,12 @@ export const useSessionView = (
     
     // Clear terminal immediately when session changes
     if (terminalInstance.current) {
-      console.log(`[useSessionView] Clearing terminal for session switch`);
       terminalInstance.current.clear();
     }
     setFormattedOutput('');
     lastProcessedOutputLength.current = 0;
 
     if (!activeSession) {
-      console.log(`[useSessionView] No active session, returning`);
       setCurrentSessionIdForOutput(null);
       // Clear any error states when no session is active
       setLoadError(null);
@@ -346,7 +332,6 @@ export const useSessionView = (
       return;
     }
 
-    console.log(`[useSessionView] Setting up for session ${activeSession.id}, status: ${activeSession.status}`);
     setCurrentSessionIdForOutput(activeSession.id);
     
     // Check if session has conversation history
@@ -399,25 +384,39 @@ export const useSessionView = (
       return '';
     }
     
-    // CRITICAL PERFORMANCE FIX: Much more aggressive limiting
-    // Process only recent output to avoid massive array operations that lock up V8
-    const MAX_OUTPUT_TO_PROCESS = 500; // Drastically reduced from 2000
+    // CRITICAL PERFORMANCE FIX: Even more aggressive limiting to prevent 2800ms+ frames
+    // Reduced from 500 to 150 to avoid V8 string concatenation bailouts
+    const MAX_OUTPUT_TO_PROCESS = 150;
+    
+    // Early exit for extremely large outputs that would cause UI blocking
+    if (outputArray.length > 5000) {
+      console.warn(`[Performance] Output array too large (${outputArray.length} items), showing recent ${MAX_OUTPUT_TO_PROCESS} items only`);
+    }
+    
     const outputToProcess = outputArray.length > MAX_OUTPUT_TO_PROCESS 
       ? outputArray.slice(-MAX_OUTPUT_TO_PROCESS)
       : outputArray;
     
-    // PERFORMANCE: Build string in chunks to avoid V8 string concatenation issues
-    if (outputToProcess.length > 100) {
-      // For large arrays, build in chunks to avoid V8 optimization bailouts
-      const chunks: string[] = [];
-      const chunkSize = 50;
-      for (let i = 0; i < outputToProcess.length; i += chunkSize) {
-        const chunk = outputToProcess.slice(i, Math.min(i + chunkSize, outputToProcess.length));
-        chunks.push(chunk.join(''));
+    // PERFORMANCE: Optimized string building to prevent V8 bailouts
+    if (outputToProcess.length > 50) {
+      // Use a more efficient approach - build directly without intermediate arrays
+      let result = '';
+      const batchSize = 25; // Smaller batches for better V8 performance
+      
+      for (let i = 0; i < outputToProcess.length; i += batchSize) {
+        const endIndex = Math.min(i + batchSize, outputToProcess.length);
+        let batchResult = '';
+        
+        // Build each batch without creating intermediate arrays
+        for (let j = i; j < endIndex; j++) {
+          batchResult += outputToProcess[j];
+        }
+        result += batchResult;
       }
-      return chunks.join('');
+      
+      return result;
     } else {
-      // For small arrays, direct join is fine
+      // For small arrays, direct join is still efficient
       return outputToProcess.join('');
     }
   }, [activeSession?.id, currentSessionIdForOutput, outputCount]);
@@ -427,7 +426,6 @@ export const useSessionView = (
     
     // Make sure we're tracking the right session for output
     if (currentSessionIdForOutput !== activeSession.id) {
-      console.log(`[useSessionView] Session ID mismatch in format effect - current: ${currentSessionIdForOutput}, active: ${activeSession.id}`);
       // If the session ID doesn't match, update it
       if (activeSession.id) {
         setCurrentSessionIdForOutput(activeSession.id);
@@ -443,8 +441,16 @@ export const useSessionView = (
       setIsWaitingForFirstOutput(false);
     }
 
-    // PERFORMANCE FIX: More aggressive debouncing for large outputs
-    const delay = outputCount > 100 ? 200 : 50; // Longer delay for large outputs
+    // PERFORMANCE FIX: Even more aggressive debouncing for large outputs to prevent frame drops
+    let delay = 50; // Default delay
+    if (outputCount > 1000) {
+      delay = 500; // Much longer delay for very large outputs
+    } else if (outputCount > 500) {
+      delay = 300; // Longer delay for large outputs
+    } else if (outputCount > 100) {
+      delay = 150; // Moderate delay for medium outputs
+    }
+    
     const timeoutId = setTimeout(() => {
       setFormattedOutput(formattedOutputMemo);
     }, delay);
@@ -454,15 +460,12 @@ export const useSessionView = (
   
   // Consolidated effect for loading output
   useEffect(() => {
-    console.log(`[Output Load Effect] Checking - activeSession: ${activeSession?.id}, currentSessionIdForOutput: ${currentSessionIdForOutput}, outputLoadState: ${outputLoadState}, loadingRef: ${loadingRef.current}, loadingSessionId: ${loadingSessionIdRef.current}`);
-    
     if (!activeSession || !currentSessionIdForOutput || currentSessionIdForOutput !== activeSession.id) {
       return;
     }
     
     // Skip initial load if continuing conversation, but allow explicit reloads
     if (isContinuingConversationRef.current && outputLoadState === 'idle' && !shouldReloadOutput) {
-      console.log(`[Output Load Effect] Skipping initial load - continuing conversation`);
       return;
     }
     
@@ -471,7 +474,7 @@ export const useSessionView = (
     
     // Check for stuck loading state and force reset if needed
     if (loadingRef.current && outputLoadState === 'idle') {
-      console.warn(`[Output Load Effect] Detected stuck loading state, forcing reset`);
+      // Stuck loading state detected - debug logging removed
       forceResetLoadingState();
     }
     
@@ -490,13 +493,11 @@ export const useSessionView = (
       setShouldReloadOutput(false);
     } else if (outputLoadState === 'error' && !loadingRef.current) {
       // Retry after error if not currently loading
-      console.log(`[Output Load Effect] Previous load errored, retrying`);
       shouldLoad = true;
       loadDelay = 1000;
     }
     
     if (shouldLoad && !loadingRef.current) {
-      console.log(`[Output Load Effect] Scheduling load for session ${activeSession.id} in ${loadDelay}ms`);
       if (loadDelay > 0) {
         outputLoadTimeoutRef.current = setTimeout(() => {
           if (!loadingRef.current) {
@@ -506,8 +507,6 @@ export const useSessionView = (
       } else {
         loadOutputContent(activeSession.id);
       }
-    } else if (shouldLoad && loadingRef.current) {
-      console.log(`[Output Load Effect] Want to load but already loading, will retry later`);
     }
   }, [
     activeSession?.id,
@@ -525,7 +524,15 @@ export const useSessionView = (
   useEffect(() => {
     let reloadDebounceTimer: NodeJS.Timeout | null = null;
     let lastReloadTime = 0;
-    const MIN_RELOAD_INTERVAL = 1000; // Increased to 1 second to prevent rapid reloads
+    // PERFORMANCE: Adaptive reload interval based on output size
+    const getMinReloadInterval = () => {
+      const outputSize = activeSession?.output?.length || 0;
+      if (outputSize > 2000) return 3000; // 3 seconds for very large outputs
+      if (outputSize > 1000) return 2000; // 2 seconds for large outputs  
+      if (outputSize > 500) return 1500;  // 1.5 seconds for medium outputs
+      return 1000; // 1 second for small outputs
+    };
+    const MIN_RELOAD_INTERVAL = getMinReloadInterval();
     
     const handleOutputAvailable = (event: CustomEvent) => {
       const { sessionId } = event.detail;
@@ -550,7 +557,6 @@ export const useSessionView = (
             }, MIN_RELOAD_INTERVAL - timeSinceLastReload);
           } else {
             // Can reload immediately
-            console.log(`[Output Available] Reloading output for session ${sessionId}`);
             setShouldReloadOutput(true);
             lastReloadTime = now;
           }
@@ -671,21 +677,35 @@ export const useSessionView = (
   const fullScriptOutputMemo = useMemo(() => {
     if (!scriptOutput || scriptOutput.length === 0) return '';
     
-    // CRITICAL PERFORMANCE FIX: Much more aggressive limit
-    const MAX_TERMINAL_OUTPUT = 300; // Drastically reduced from 1000
+    // CRITICAL PERFORMANCE FIX: Even more aggressive limit for terminal output
+    const MAX_TERMINAL_OUTPUT = 100; // Further reduced from 300 to prevent blocking
+    
+    // Early warning for very large terminal outputs
+    if (scriptOutput.length > 2000) {
+      console.warn(`[Performance] Script output too large (${scriptOutput.length} items), showing recent ${MAX_TERMINAL_OUTPUT} items only`);
+    }
+    
     const outputToProcess = scriptOutput.length > MAX_TERMINAL_OUTPUT
       ? scriptOutput.slice(-MAX_TERMINAL_OUTPUT)
       : scriptOutput;
     
-    // Build in chunks for better performance
-    if (outputToProcess.length > 50) {
-      const chunks: string[] = [];
-      const chunkSize = 25;
-      for (let i = 0; i < outputToProcess.length; i += chunkSize) {
-        const chunk = outputToProcess.slice(i, Math.min(i + chunkSize, outputToProcess.length));
-        chunks.push(chunk.join(''));
+    // PERFORMANCE: Direct string building without intermediate arrays
+    if (outputToProcess.length > 25) {
+      let result = '';
+      const batchSize = 15; // Very small batches for terminal output
+      
+      for (let i = 0; i < outputToProcess.length; i += batchSize) {
+        const endIndex = Math.min(i + batchSize, outputToProcess.length);
+        let batchResult = '';
+        
+        // Build each batch directly
+        for (let j = i; j < endIndex; j++) {
+          batchResult += outputToProcess[j];
+        }
+        result += batchResult;
       }
-      return chunks.join('');
+      
+      return result;
     } else {
       return outputToProcess.join('');
     }
@@ -746,32 +766,27 @@ export const useSessionView = (
     }
     
     if (!formattedOutput && formattedOutput !== '') {
-      console.log(`[Terminal Write Effect] No formatted output`);
-      return;
+        return;
     }
     
     const currentActiveSession = useSessionStore.getState().getActiveSession();
     if (!currentActiveSession || currentSessionIdForOutput !== currentActiveSession.id) {
-      console.log(`[Terminal Write Effect] Session mismatch: ${currentSessionIdForOutput} !== ${currentActiveSession?.id}`);
-      return;
+        return;
     }
 
     // Write to terminal
     if (lastProcessedOutputLength.current === 0) {
       // Clear terminal and write all content for new session
-      console.log(`[Terminal Write Effect] New session output detected, clearing terminal and writing all content, length: ${formattedOutput.length}`);
-      terminalInstance.current.clear();
+        terminalInstance.current.clear();
       terminalInstance.current.write(formattedOutput);
       lastProcessedOutputLength.current = formattedOutput.length;
     } else if (formattedOutput.length > lastProcessedOutputLength.current) {
       // Write only new content for existing session
       const newContent = formattedOutput.substring(lastProcessedOutputLength.current);
-      console.log(`[Terminal Write Effect] Writing new content to terminal, length: ${newContent.length}`);
-      terminalInstance.current.write(newContent);
+        terminalInstance.current.write(newContent);
       lastProcessedOutputLength.current = formattedOutput.length;
     } else if (formattedOutput.length < lastProcessedOutputLength.current) {
-      // This shouldn't happen, but log it if it does
-      console.warn(`[Terminal Write Effect] Formatted output shrank from ${lastProcessedOutputLength.current} to ${formattedOutput.length}`);
+      // This shouldn't happen, debug logging removed
     }
     
     if (formattedOutput.length > 0) {
@@ -797,7 +812,6 @@ export const useSessionView = (
     } else if (fullScriptOutput.length < lastProcessedScriptOutputLength.current) {
       // Output got shorter but not cleared - this might be a sync issue
       // Don't reset, just update the tracking
-      console.log('[Terminal] Script output got shorter, updating tracking without reset');
       lastProcessedScriptOutputLength.current = fullScriptOutput.length;
     } else if (fullScriptOutput.length > lastProcessedScriptOutputLength.current) {
       const newOutput = fullScriptOutput.substring(lastProcessedScriptOutputLength.current);
@@ -818,7 +832,6 @@ export const useSessionView = (
     const handleSessionDeleted = (event: CustomEvent) => {
       // The event detail contains just { id } from the backend
       if (event.detail?.id === activeSessionId) {
-        console.log(`[useSessionView] Active session ${activeSessionId} was deleted/archived`);
         // Force reset loading states
         forceResetLoadingState();
         // Clear terminal
@@ -861,7 +874,6 @@ export const useSessionView = (
     const handleSwitchToViewDiff = (event: CustomEvent) => {
       const { sessionId } = event.detail;
       if (sessionId && activeSession?.id === sessionId) {
-        console.log('[useSessionView] View Diff switch event - now handled by panels');
         // Panels handle their own switching now
       }
     };
@@ -876,7 +888,6 @@ export const useSessionView = (
   useEffect(() => {
     const handleSelectAndViewDiff = async (event: CustomEvent) => {
       const { sessionId } = event.detail;
-      console.log('[useSessionView] Select session and view diff:', sessionId);
       
       // First, select the session if it's not already active
       if (sessionId && activeSession?.id !== sessionId) {
@@ -912,19 +923,15 @@ export const useSessionView = (
   useEffect(() => {
     // Add a small delay to ensure CSS has propagated
     const timer = setTimeout(() => {
-      console.log('[Terminal Theme Update] Theme changed to:', theme);
-      console.log('[Terminal Theme Update] Root classes:', document.documentElement.className);
       
       if (terminalInstance.current) {
         const newTheme = getTerminalTheme();
-        console.log('[Terminal Theme Update] New terminal theme:', newTheme);
         terminalInstance.current.options.theme = newTheme;
         // Force refresh to apply new colors
         terminalInstance.current.refresh(0, terminalInstance.current.rows - 1);
       }
       if (scriptTerminalInstance.current) {
         const newScriptTheme = getScriptTerminalTheme();
-        console.log('[Terminal Theme Update] New script terminal theme:', newScriptTheme);
         scriptTerminalInstance.current.options.theme = newScriptTheme;
         // Force refresh to apply new colors
         scriptTerminalInstance.current.refresh(0, scriptTerminalInstance.current.rows - 1);
@@ -1026,13 +1033,13 @@ export const useSessionView = (
     previousStatusRef.current = status;
   }, [activeSession?.status, activeSessionId]);
   
-  const handleNavigateToPrompt = useCallback((marker: any) => {
+  const handleNavigateToPrompt = useCallback((marker: PromptMarker) => {
     if (!terminalInstance.current) return;
     // Output view removed - always navigate directly
     navigateToPromptInTerminal(marker);
   }, []);
 
-  const navigateToPromptInTerminal = (marker: any) => {
+  const navigateToPromptInTerminal = (marker: PromptMarker) => {
     if (!terminalInstance.current || !activeSession) return;
     const { prompt_text, output_line } = marker;
     if (!prompt_text) return;
@@ -1087,14 +1094,11 @@ export const useSessionView = (
     const handleDebugKeyboard = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key === 'D') {
         e.preventDefault();
-        console.log('=== DEBUG STATE DUMP ===');
         debugState();
-        console.log('=== END DEBUG STATE ===');
       }
       // Force reset with Cmd/Ctrl + Shift + R
       if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key === 'R') {
         e.preventDefault();
-        console.log('=== FORCE RESET LOADING STATE ===');
         forceResetLoadingState();
         setShouldReloadOutput(true);
       }
@@ -1103,10 +1107,8 @@ export const useSessionView = (
     return () => window.removeEventListener('keydown', handleDebugKeyboard);
   }, [debugState, forceResetLoadingState]);
 
-  const handleSendInput = async (attachedImages?: any[], attachedTexts?: any[]) => {
-    console.log('[useSessionView] handleSendInput called', { input, activeSession: activeSession?.id, hasActiveSession: !!activeSession });
+  const handleSendInput = async (attachedImages?: AttachedImage[], attachedTexts?: AttachedText[]) => {
     if (!input.trim() || !activeSession) {
-      console.log('[useSessionView] handleSendInput early return', { inputTrimmed: !input.trim(), noActiveSession: !activeSession });
       return;
     }
     
@@ -1114,7 +1116,6 @@ export const useSessionView = (
     
     // Check if we have compacted context to inject
     if (contextCompacted && compactedContext) {
-      console.log('[Context Compaction] Injecting compacted context into prompt');
       finalInput = `<session_context>\n${compactedContext}\n</session_context>\n\n${finalInput}`;
       
       // Clear the compacted context after using it
@@ -1136,7 +1137,6 @@ export const useSessionView = (
           );
           
           attachmentPaths.push(textFilePath);
-          console.log(`[Attached Text] Saved ${text.size} characters to: ${textFilePath}`);
         }
       } catch (error) {
         console.error('Failed to save attached text to file:', error);
@@ -1158,7 +1158,6 @@ export const useSessionView = (
         );
         
         attachmentPaths.push(...imagePaths);
-        console.log(`[Attached Images] Saved ${imagePaths.length} images`);
       } catch (error) {
         console.error('Failed to save images:', error);
         // Continue without images on error
@@ -1178,7 +1177,11 @@ export const useSessionView = (
     }
   };
 
-  const handleContinueConversation = async (attachedImages?: any[], attachedTexts?: any[]) => {
+  const handleContinueConversation = async (
+    attachedImages?: AttachedImage[],
+    attachedTexts?: AttachedText[],
+    modelOverride?: string
+  ) => {
     if (!input.trim() || !activeSession) return;
     
     // Mark that we're continuing a conversation to prevent output reload
@@ -1188,7 +1191,6 @@ export const useSessionView = (
     
     // Check if we have compacted context to inject
     if (contextCompacted && compactedContext) {
-      console.log('[Context Compaction] Injecting compacted context into continuation prompt');
       finalInput = `<session_context>\n${compactedContext}\n</session_context>\n\n${finalInput}`;
       
       // Clear the compacted context after using it
@@ -1210,7 +1212,6 @@ export const useSessionView = (
           );
           
           attachmentPaths.push(textFilePath);
-          console.log(`[Attached Text] Saved ${text.size} characters to: ${textFilePath}`);
         }
       } catch (error) {
         console.error('Failed to save attached text to file:', error);
@@ -1232,7 +1233,6 @@ export const useSessionView = (
         );
         
         attachmentPaths.push(...imagePaths);
-        console.log(`[Attached Images] Saved ${imagePaths.length} images`);
       } catch (error) {
         console.error('Failed to save images:', error);
         // Continue without images on error
@@ -1245,7 +1245,7 @@ export const useSessionView = (
       finalInput = `${finalInput}${attachmentsMessage}`;
     }
     
-    const response = await API.sessions.continue(activeSession.id, finalInput);
+    const response = await API.sessions.continue(activeSession.id, finalInput, modelOverride);
     if (response.success) {
       setInput('');
       setUltrathink(false);
@@ -1321,17 +1321,14 @@ export const useSessionView = (
   
   const handleRebaseMainIntoWorktree = async () => {
     if (!activeSession) return;
-    console.log(`[handleRebaseMainIntoWorktree] Starting rebase for session ${activeSession.id}`);
     setIsMerging(true);
     setMergeError(null);
     try {
-      console.log(`[handleRebaseMainIntoWorktree] Calling API.sessions.rebaseMainIntoWorktree`);
-      const response = await API.sessions.rebaseMainIntoWorktree(activeSession.id);
-      console.log(`[handleRebaseMainIntoWorktree] API call completed`, response);
+      const response: GitErrorResponse = await API.sessions.rebaseMainIntoWorktree(activeSession.id);
       
       if (!response.success) {
-        if ((response as any).gitError) {
-          const gitError = (response as any).gitError;
+        if (response.gitError) {
+          const gitError = response.gitError;
           setGitErrorDetails({
             title: gitError.hasConflicts ? 'Rebase Conflicts Detected' : 'Rebase Failed',
             message: response.error || 'Failed to rebase main into worktree',
@@ -1348,10 +1345,8 @@ export const useSessionView = (
           setMergeError(response.error || 'Failed to rebase main into worktree');
         }
       } else {
-        console.log(`[handleRebaseMainIntoWorktree] Rebase successful, checking for changes to rebase`);
         // Run this in the background and don't let it block the finally block
         API.sessions.hasChangesToRebase(activeSession.id).then(changesResponse => {
-          console.log(`[handleRebaseMainIntoWorktree] hasChangesToRebase completed`, changesResponse);
           if (changesResponse.success) setHasChangesToRebase(changesResponse.data);
         }).catch(error => {
           console.error(`[handleRebaseMainIntoWorktree] hasChangesToRebase failed`, error);
@@ -1361,7 +1356,6 @@ export const useSessionView = (
       console.error(`[handleRebaseMainIntoWorktree] Error in try block`, error);
       setMergeError(error instanceof Error ? error.message : 'Failed to rebase main into worktree');
     } finally {
-      console.log(`[handleRebaseMainIntoWorktree] Finally block executing, setting isMerging to false`);
       setIsMerging(false);
     }
   };
@@ -1390,7 +1384,7 @@ export const useSessionView = (
     try {
       const promptsResponse = await API.sessions.getPrompts(activeSession.id);
       if (promptsResponse.success && promptsResponse.data?.length > 0) {
-        return promptsResponse.data.map((p: any) => p.prompt_text || p.content).filter(Boolean).join('\n\n');
+        return promptsResponse.data.map((p: PromptMarker) => p.prompt_text).filter(Boolean).join('\n\n');
       }
     } catch (error) {
       console.error('Error generating default commit message:', error);
@@ -1415,13 +1409,13 @@ export const useSessionView = (
     setMergeError(null);
     setShowCommitMessageDialog(false);
     try {
-      const response = shouldSquash
+      const response: GitErrorResponse = shouldSquash
         ? await API.sessions.squashAndRebaseToMain(activeSession.id, message)
         : await API.sessions.rebaseToMain(activeSession.id);
 
       if (!response.success) {
-        if ((response as any).gitError) {
-          const gitError = (response as any).gitError;
+        if (response.gitError) {
+          const gitError = response.gitError;
           setGitErrorDetails({
             title: shouldSquash ? 'Squash and Rebase Failed' : 'Rebase Failed',
             message: response.error || `Failed to ${shouldSquash ? 'squash and ' : ''}rebase to main`,
@@ -1476,8 +1470,8 @@ export const useSessionView = (
     }
   };
   
-  const handleStravuFileSelect = (file: any, content: string) => {
-    const formattedContent = `\n\n## File: ${file.name}\n\`\`\`${file.type}\n${content}\n\`\`\`\n\n`;
+  const handleStravuFileSelect = (notebook: { id: string; title: string; excerpt?: string }, content: string) => {
+    const formattedContent = `\n\n## Notebook: ${notebook.title}\n\`\`\`\n${content}\n\`\`\`\n\n`;
     setInput(prev => prev + formattedContent);
   };
 

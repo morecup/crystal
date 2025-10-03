@@ -1,15 +1,55 @@
 import { MessageTransformer, UnifiedMessage, MessageSegment, ToolCall, ToolResult } from './MessageTransformer';
 
+// Content block types
+interface ContentBlock {
+  type: 'text' | 'tool_use' | 'tool_result' | 'thinking';
+  text?: string;
+  thinking?: string;
+  content?: string;
+  id?: string;
+  name?: string;
+  input?: Record<string, unknown>;
+  tool_use_id?: string;
+  is_error?: boolean;
+}
+
+// Tool definition types
+interface ToolDefinition {
+  name: string;
+  description?: string;
+  input_schema?: Record<string, unknown>;
+  [key: string]: unknown;
+}
+
+// MCP server definition types
+interface McpServerDefinition {
+  name: string;
+  command?: string;
+  args?: string[];
+  env?: Record<string, string>;
+  [key: string]: unknown;
+}
+
 // Claude-specific message format
 interface ClaudeRawMessage {
   id?: string;
   type: 'user' | 'assistant' | 'system' | 'tool_use' | 'tool_result' | 'result';
   role?: 'user' | 'assistant' | 'system';
-  content?: string | any;
-  message?: { content?: string | any; [key: string]: any };
+  content?: string | object;
+  message?: { 
+    content?: string | ContentBlock[]; 
+    model?: string;
+    duration?: number;
+    usage?: {
+      input_tokens?: number;
+      output_tokens?: number;
+      cost?: number;
+    };
+    [key: string]: unknown;
+  };
   timestamp: string;
   name?: string;
-  input?: any;
+  input?: Record<string, unknown>;
   tool_use_id?: string;
   parent_tool_use_id?: string;
   session_id?: string;
@@ -17,8 +57,8 @@ interface ClaudeRawMessage {
   subtype?: string;
   cwd?: string;
   model?: string;
-  tools?: any[];
-  mcp_servers?: any[];
+  tools?: ToolDefinition[];
+  mcp_servers?: McpServerDefinition[];
   permissionMode?: string;
   summary?: string;
   error?: string;
@@ -28,7 +68,7 @@ interface ClaudeRawMessage {
   result?: string;
   duration_ms?: number;
   total_cost_usd?: number;
-  [key: string]: any;
+  [key: string]: unknown;
 }
 
 export class ClaudeMessageTransformer implements MessageTransformer {
@@ -81,17 +121,17 @@ export class ClaudeMessageTransformer implements MessageTransformer {
           if (block.type === 'tool_use') {
             const isTaskAgent = block.name === 'Task';
             const toolCall: ToolCall = {
-              id: block.id,
-              name: block.name,
+              id: block.id || '',
+              name: block.name || '',
               input: block.input,
-              status: toolResults.has(block.id) ? 'success' : 'pending',
-              result: toolResults.get(block.id),
+              status: toolResults.has(block.id || '') ? 'success' : 'pending',
+              result: toolResults.get(block.id || ''),
               isSubAgent: isTaskAgent,
-              subAgentType: isTaskAgent ? block.input?.subagent_type : undefined,
-              parentToolId: parentToolMap.get(block.id),
+              subAgentType: isTaskAgent && block.input && typeof block.input === 'object' && 'subagent_type' in block.input ? String(block.input.subagent_type) : undefined,
+              parentToolId: parentToolMap.get(block.id || ''),
               childToolCalls: []
             };
-            allToolCalls.set(block.id, toolCall);
+            allToolCalls.set(block.id || '', toolCall);
           }
         }
       }
@@ -136,10 +176,33 @@ export class ClaudeMessageTransformer implements MessageTransformer {
   }
   
   private parseUserMessage(msg: ClaudeRawMessage): UnifiedMessage | null {
+    // First, extract the text content to check for slash command results
+    const textContent = this.extractTextContent(msg);
+
+    // Check if this is a slash command result (contains <local-command-stdout> tags)
+    if (textContent && textContent.includes('<local-command-stdout>')) {
+      // Extract content and remove tags
+      const slashCommandContent = textContent
+        .replace(/<local-command-stdout>/g, '')
+        .replace(/<\/local-command-stdout>/g, '')
+        .trim();
+
+      return {
+        id: msg.id || `slash_result_${++this.messageIdCounter}`,
+        role: 'system',
+        timestamp: msg.timestamp,
+        segments: [{ type: 'text', content: slashCommandContent }],
+        metadata: {
+          agent: 'claude',
+          systemSubtype: 'slash_command_result'
+        }
+      };
+    }
+
     // Check if this is a tool result message
     let hasToolResult = false;
     let hasOnlyText = true;
-    
+
     if (msg.message?.content && Array.isArray(msg.message.content)) {
       const content = msg.message.content;
       for (let j = 0; j < content.length; j++) {
@@ -153,11 +216,9 @@ export class ClaudeMessageTransformer implements MessageTransformer {
         }
       }
     }
-    
+
     // Only show real user prompts (text-only messages without tool results)
     if (!hasToolResult && hasOnlyText) {
-      const textContent = this.extractTextContent(msg);
-      
       if (textContent) {
         return {
           id: msg.id || `user_msg_${++this.messageIdCounter}`,
@@ -168,7 +229,7 @@ export class ClaudeMessageTransformer implements MessageTransformer {
         };
       }
     }
-    
+
     return null;
   }
   
@@ -190,7 +251,7 @@ export class ClaudeMessageTransformer implements MessageTransformer {
             segments.push({ type: 'thinking', content: thinkingContent.trim() });
           }
         } else if (block.type === 'tool_use' && allToolCalls) {
-          const toolCall = allToolCalls.get(block.id);
+          const toolCall = allToolCalls.get(block.id || '');
           // Only add top-level tools (those without parents)
           if (toolCall && !toolCall.parentToolId) {
             segments.push({ type: 'tool_call', tool: toolCall });
@@ -237,19 +298,36 @@ export class ClaudeMessageTransformer implements MessageTransformer {
   
   private parseSystemMessage(msg: ClaudeRawMessage): UnifiedMessage | null {
     if (msg.subtype === 'init') {
+      // Extract slash commands if available
+      if (msg.slash_commands && Array.isArray(msg.slash_commands)) {
+        console.log('[slash-debug] Detected slash commands in init message:', msg.slash_commands);
+        // Store slash commands in localStorage keyed by session_id
+        // We'll update this to use panel context later
+        if (msg.session_id) {
+          try {
+            const slashCommandsKey = `slashCommands_${msg.session_id}`;
+            localStorage.setItem(slashCommandsKey, JSON.stringify(msg.slash_commands));
+            console.log('[slash-debug] Stored slash commands for session:', msg.session_id);
+          } catch (e) {
+            console.warn('[slash-debug] Failed to store slash commands:', e);
+          }
+        }
+      }
+
       return {
         id: msg.id || `system_init_msg_${++this.messageIdCounter}`,
         role: 'system',
         timestamp: msg.timestamp,
-        segments: [{ 
-          type: 'system_info', 
+        segments: [{
+          type: 'system_info',
           info: {
             cwd: msg.cwd,
             model: msg.model,
             tools: msg.tools,
             mcp_servers: msg.mcp_servers,
             permissionMode: msg.permissionMode,
-            session_id: msg.session_id
+            session_id: msg.session_id,
+            slash_commands: msg.slash_commands
           }
         }],
         metadata: {
@@ -344,8 +422,8 @@ export class ClaudeMessageTransformer implements MessageTransformer {
     // Handle Claude format: message.content as array of content blocks
     if (msg.message?.content && Array.isArray(msg.message.content)) {
       return msg.message.content
-        .filter((block: any) => block.type === 'text')
-        .map((block: any) => block.text || '')
+        .filter((block: ContentBlock) => block.type === 'text')
+        .map((block: ContentBlock) => block.text || '')
         .join('\n')
         .trim();
     }

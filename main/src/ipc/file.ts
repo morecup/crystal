@@ -47,7 +47,7 @@ interface FileSearchRequest {
 }
 
 export function registerFileHandlers(ipcMain: IpcMain, services: AppServices): void {
-  const { sessionManager, databaseService, gitStatusManager } = services;
+  const { sessionManager, databaseService, gitStatusManager, configManager } = services;
 
   // Read file contents from a session's worktree
   ipcMain.handle('file:read', async (_, request: FileReadRequest) => {
@@ -234,12 +234,16 @@ export function registerFileHandlers(ipcMain: IpcMain, services: AppServices): v
         // Stage all changes
         await execAsync('git add -A', { cwd: session.worktreePath });
 
-        // Create the commit with Crystal signature
-        const commitMessage = `${request.message}
+        // Check if Crystal footer is enabled (default: true)
+        const config = configManager.getConfig();
+        const enableCrystalFooter = config?.enableCrystalFooter !== false;
 
-🤖 Generated with [Crystal](https://stravu.com/?utm_source=Crystal&utm_medium=OS&utm_campaign=Crystal&utm_id=1)
+        // Create the commit with Crystal signature if enabled
+        const commitMessage = enableCrystalFooter ? `${request.message}
 
-Co-Authored-By: Crystal <noreply@stravu.com>`;
+💎 Built using [Crystal](https://github.com/stravu/crystal)
+
+Co-Authored-By: Crystal <crystal@stravu.com>` : request.message;
 
         // Use a here document to handle multi-line commit messages
         const command = `git commit -m "$(cat <<'EOF'
@@ -258,18 +262,25 @@ EOF
         }
 
         return { success: true };
-      } catch (error: any) {
+      } catch (error: unknown) {
         // Check if it's a pre-commit hook failure
-        if (error.message?.includes('pre-commit hook')) {
+        if (error instanceof Error && error.message.includes('pre-commit hook')) {
           // Try to commit again in case the pre-commit hook made changes
           try {
             await execAsync('git add -A', { cwd: session.worktreePath });
+            
+            // Check if Crystal footer is enabled (default: true)
+            const config = configManager.getConfig();
+            const enableCrystalFooter = config?.enableCrystalFooter !== false;
+            
+            const retryMessage = enableCrystalFooter ? `${request.message}
+
+💎 Built using [Crystal](https://github.com/stravu/crystal)
+
+Co-Authored-By: Crystal <crystal@stravu.com>` : request.message;
+            
             const command = `git commit -m "$(cat <<'EOF'
-${request.message}
-
-🤖 Generated with [Crystal](https://stravu.com/?utm_source=Crystal&utm_medium=OS&utm_campaign=Crystal&utm_id=1)
-
-Co-Authored-By: Crystal <noreply@stravu.com>
+${retryMessage}
 EOF
 )"`;
             await execAsync(command, { cwd: session.worktreePath });
@@ -283,11 +294,11 @@ EOF
             }
             
             return { success: true };
-          } catch (retryError: any) {
-            throw new Error(`Git commit failed: ${retryError.message || retryError}`);
+          } catch (retryError: unknown) {
+            throw new Error(`Git commit failed: ${retryError instanceof Error ? retryError.message : retryError}`);
           }
         }
-        throw new Error(`Git commit failed: ${error.message || error}`);
+        throw new Error(`Git commit failed: ${error instanceof Error ? error.message : error}`);
       }
     } catch (error) {
       console.error('Error committing changes:', error);
@@ -320,8 +331,8 @@ EOF
         await execAsync(command, { cwd: session.worktreePath });
 
         return { success: true };
-      } catch (error: any) {
-        throw new Error(`Git revert failed: ${error.message || error}`);
+      } catch (error: unknown) {
+        throw new Error(`Git revert failed: ${error instanceof Error ? error.message : error}`);
       }
     } catch (error) {
       console.error('Error reverting commit:', error);
@@ -352,8 +363,8 @@ EOF
         await execAsync('git clean -fd', { cwd: session.worktreePath });
 
         return { success: true };
-      } catch (error: any) {
-        throw new Error(`Git restore failed: ${error.message || error}`);
+      } catch (error: unknown) {
+        throw new Error(`Git restore failed: ${error instanceof Error ? error.message : error}`);
       }
     } catch (error) {
       console.error('Error restoring changes:', error);
@@ -400,12 +411,12 @@ EOF
 
         const sanitized = stdout.replace(/^\uFEFF/, '').replace(/\r\n/g, '\n');
         return { success: true, content: sanitized };
-      } catch (error: any) {
+      } catch (error: unknown) {
         // If file doesn't exist at that revision, return empty content
-        if (error.message?.includes('does not exist') || error.message?.includes('bad file')) {
+        if (error instanceof Error && (error.message.includes('does not exist') || error.message.includes('bad file'))) {
           return { success: true, content: '' };
         }
-        throw new Error(`Failed to read file at revision: ${error.message || error}`);
+        throw new Error(`Failed to read file at revision: ${error instanceof Error ? error.message : error}`);
       }
     } catch (error) {
       console.error('Error reading file at revision:', error);
@@ -706,6 +717,147 @@ EOF
         success: false, 
         error: error instanceof Error ? error.message : 'Unknown error',
         files: []
+      };
+    }
+  });
+
+  // Read file from project directory (not worktree)
+  ipcMain.handle('file:read-project', async (_, request: { projectId: number; filePath: string }) => {
+    console.log('[file:read-project] Request:', request);
+    try {
+      const project = databaseService.getProject(request.projectId);
+      if (!project) {
+        console.error('[file:read-project] Project not found:', request.projectId);
+        throw new Error(`Project not found: ${request.projectId}`);
+      }
+
+      console.log('[file:read-project] Project path:', project.path);
+
+      // Ensure the file path is relative and safe
+      const normalizedPath = path.normalize(request.filePath);
+      if (normalizedPath.startsWith('..') || path.isAbsolute(normalizedPath)) {
+        throw new Error('Invalid file path');
+      }
+
+      const fullPath = path.join(project.path, normalizedPath);
+      console.log('[file:read-project] Full path:', fullPath);
+      
+      // Check if file exists
+      try {
+        await fs.access(fullPath);
+        console.log('[file:read-project] File exists');
+      } catch {
+        // File doesn't exist, return null
+        console.log('[file:read-project] File does not exist');
+        return { success: true, data: null };
+      }
+
+      // Read the file
+      const content = await fs.readFile(fullPath, 'utf-8');
+      console.log('[file:read-project] Read', content.length, 'bytes');
+      return { success: true, data: content };
+    } catch (error) {
+      console.error('[file:read-project] Error:', error);
+      return { 
+        success: false, 
+        error: error instanceof Error ? error.message : 'Unknown error' 
+      };
+    }
+  });
+
+  // Write file to project directory (not worktree)
+  ipcMain.handle('file:write-project', async (_, request: { projectId: number; filePath: string; content: string }) => {
+    console.log('[file:write-project] Request:', { projectId: request.projectId, filePath: request.filePath, contentLength: request.content.length });
+    try {
+      const project = databaseService.getProject(request.projectId);
+      if (!project) {
+        console.error('[file:write-project] Project not found:', request.projectId);
+        throw new Error(`Project not found: ${request.projectId}`);
+      }
+
+      console.log('[file:write-project] Project path:', project.path);
+
+      // Ensure the file path is relative and safe
+      const normalizedPath = path.normalize(request.filePath);
+      if (normalizedPath.startsWith('..') || path.isAbsolute(normalizedPath)) {
+        throw new Error('Invalid file path');
+      }
+
+      const fullPath = path.join(project.path, normalizedPath);
+      console.log('[file:write-project] Full path:', fullPath);
+      
+      // Ensure directory exists
+      const dir = path.dirname(fullPath);
+      await fs.mkdir(dir, { recursive: true });
+      
+      // Write the file
+      await fs.writeFile(fullPath, request.content, 'utf-8');
+      console.log('[file:write-project] Successfully wrote', request.content.length, 'bytes to', fullPath);
+      
+      return { success: true };
+    } catch (error) {
+      console.error('[file:write-project] Error:', error);
+      return { 
+        success: false, 
+        error: error instanceof Error ? error.message : 'Unknown error' 
+      };
+    }
+  });
+
+  // Execute git command in project directory
+  ipcMain.handle('git:execute-project', async (_, request: { projectId: number; args: string[] }) => {
+    console.log('[git:execute-project] Request:', request);
+    try {
+      const project = databaseService.getProject(request.projectId);
+      if (!project) {
+        console.error('[git:execute-project] Project not found:', request.projectId);
+        throw new Error(`Project not found: ${request.projectId}`);
+      }
+
+      console.log('[git:execute-project] Project path:', project.path);
+      console.log('[git:execute-project] Git command:', 'git', request.args.join(' '));
+
+      // Import execSync from child_process
+      const { execSync } = require('child_process');
+      
+      // Execute git command
+      const result = execSync(`git ${request.args.map(arg => {
+        // Properly escape arguments for shell
+        if (arg.includes(' ') || arg.includes('\n') || arg.includes('"')) {
+          return `"${arg.replace(/"/g, '\\"')}"`;
+        }
+        return arg;
+      }).join(' ')}`, {
+        cwd: project.path,
+        encoding: 'utf-8',
+        maxBuffer: 1024 * 1024 * 10 // 10MB buffer
+      });
+
+      console.log('[git:execute-project] Command successful');
+      return { success: true, output: result };
+    } catch (error) {
+      console.error('[git:execute-project] Error:', error);
+
+      // Extract error message from execSync error
+      let errorMessage = 'Unknown error';
+      if (error instanceof Error) {
+        errorMessage = error.message;
+        // If it's an execSync error, it may have stderr/stdout buffers
+        interface ExecSyncError extends Error {
+          stderr?: Buffer;
+          stdout?: Buffer;
+        }
+        const execError = error as ExecSyncError;
+        if (execError.stderr) {
+          errorMessage = execError.stderr.toString();
+        } else if (execError.stdout) {
+          errorMessage = execError.stdout.toString();
+        }
+      }
+
+      return {
+        success: false,
+        error: errorMessage
       };
     }
   });

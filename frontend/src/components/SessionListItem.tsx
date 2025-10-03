@@ -4,6 +4,7 @@ import { useNavigationStore } from '../stores/navigationStore';
 import { StatusIndicator } from './StatusIndicator';
 import { GitStatusIndicator } from './GitStatusIndicator';
 import { ConfirmDialog } from './ConfirmDialog';
+import { RunScriptConfigDialog } from './RunScriptConfigDialog';
 import { API } from '../utils/api';
 import { Star, Archive, Trash2 } from 'lucide-react';
 import type { Session, GitStatus } from '../types/session';
@@ -33,12 +34,19 @@ export const SessionListItem = memo(function SessionListItem({ session, isNested
   const [showPermanentDeleteConfirm, setShowPermanentDeleteConfirm] = useState(false);
   const [deleteLocalBranch, setDeleteLocalBranch] = useState(true);
   const [deleteRemoteBranch, setDeleteRemoteBranch] = useState(false);
+  const [showRunScriptConfig, setShowRunScriptConfig] = useState(false);
   const [gitStatusLoading, setGitStatusLoading] = useState(false);
   
   
   // Performance optimization: Remove unnecessary subscription
   // The component already receives the session as a prop, which will cause re-render when it changes
   // No need for an additional store subscription that runs for every session item on every store change
+  
+  // Sync git status loading state from store
+  useEffect(() => {
+    const loading = useSessionStore.getState().isGitStatusLoading(session.id);
+    setGitStatusLoading(loading);
+  }, [session.id]);
   
   useEffect(() => {
     // Check if this session's project has a run script
@@ -54,25 +62,23 @@ export const SessionListItem = memo(function SessionListItem({ session, isNested
 
     checkRunScript();
 
-    // Listen for project updates
-    let unsubscribe: (() => void) | undefined;
-    
-    if (window.electronAPI?.events?.onProjectUpdated) {
-      unsubscribe = window.electronAPI.events.onProjectUpdated((project) => {
-        // Check if this session belongs to the updated project
-        if (session.projectId === project.id) {
-          // Re-check if the run script exists for this session
-          checkRunScript();
-        }
-      });
-    }
-
-    return () => {
-      if (unsubscribe) {
-        unsubscribe();
+    // Listen for custom project update events from the global useIPCEvents hook  
+    const handleProjectUpdate = (event: CustomEvent) => {
+      const project = event.detail;
+      // Check if this session belongs to the updated project
+      if (session.projectId === project.id) {
+        // Re-check if the run script exists for this session
+        checkRunScript();
       }
     };
-  }, [session.id, session.projectId]);
+    
+    window.addEventListener('project-updated', handleProjectUpdate as EventListener);
+
+    return () => {
+      window.removeEventListener('project-updated', handleProjectUpdate as EventListener);
+    };
+    // Only re-run when the actual session ID changes to prevent memory leaks
+  }, [session.id]);
 
   // Combine script-related effects
   useEffect(() => {
@@ -105,60 +111,64 @@ export const SessionListItem = memo(function SessionListItem({ session, isNested
   }, [session.id]);
 
   useEffect(() => {
-    // Fetch Git status for this session (non-blocking)
-    const fetchGitStatus = async (isInitialLoad = false) => {
-      try {
-        setGitStatusLoading(true);
-        // Use non-blocking fetch with initial load flag for staggered loading
-        const response = await window.electronAPI.invoke('sessions:get-git-status', session.id, true, isInitialLoad);
-        if (response.success) {
-          // If we got cached status, use it immediately
-          if (response.gitStatus) {
+    // Optimized git status fetching - rely on centralized smart polling instead of individual fetches
+    const fetchGitStatusIfNeeded = async () => {
+      // Only fetch if we don't have git status yet and session is active/viable
+      if (!session.archived && session.status !== 'error' && !gitStatus && !session.gitStatus) {
+        try {
+          setGitStatusLoading(true);
+          // Use queue-based initial load to prevent overwhelming the system
+          const response = await window.electronAPI.invoke('sessions:get-git-status', session.id, false, true);
+          if (response.success && response.gitStatus) {
             setGitStatus(response.gitStatus);
           }
-          // Loading indicator will be cleared when the background refresh completes
-          // via the git-status-updated event
-          if (!response.backgroundRefresh) {
-            setGitStatusLoading(false);
-          }
-        } else {
+          setGitStatusLoading(false);
+        } catch (error) {
+          console.warn('Error fetching initial git status:', error);
           setGitStatusLoading(false);
         }
-      } catch (error) {
-        console.error('Error fetching git status:', error);
+      }
+    };
+
+    // Use session.gitStatus if available, or fetch only once if needed
+    if (session.gitStatus) {
+      setGitStatus(session.gitStatus);
+    } else {
+      fetchGitStatusIfNeeded();
+    }
+
+    // Listen for custom git status events from the global useIPCEvents hook
+    const handleGitStatusUpdate = (event: CustomEvent) => {
+      const { sessionId, gitStatus } = event.detail;
+      if (sessionId === session.id) {
+        setGitStatus(gitStatus);
         setGitStatusLoading(false);
       }
     };
-
-    // Initial fetch only if we don't already have git status
-    if (!session.archived && session.status !== 'error' && !gitStatus) {
-      fetchGitStatus(true); // Pass true for initial load
-    }
-
-    // Listen for git status updates
-    let unsubscribeGitStatus: (() => void) | undefined;
     
-    if (window.electronAPI?.events?.onGitStatusUpdated) {
-      unsubscribeGitStatus = window.electronAPI.events.onGitStatusUpdated((data) => {
-        if (data.sessionId === session.id) {
-          setGitStatus(data.gitStatus);
-          setGitStatusLoading(false);
-        }
-      });
-    }
-
-    return () => {
-      if (unsubscribeGitStatus) {
-        unsubscribeGitStatus();
+    // Listen for git status loading events to show immediate feedback
+    const handleGitStatusLoading = (event: CustomEvent) => {
+      const { sessionId } = event.detail;
+      if (sessionId === session.id) {
+        setGitStatusLoading(true);
       }
     };
-  }, [session.id, session.archived, session.status, gitStatus]);
+    
+    window.addEventListener('git-status-updated', handleGitStatusUpdate as EventListener);
+    window.addEventListener('git-status-loading', handleGitStatusLoading as EventListener);
+
+    return () => {
+      window.removeEventListener('git-status-updated', handleGitStatusUpdate as EventListener);
+      window.removeEventListener('git-status-loading', handleGitStatusLoading as EventListener);
+    };
+    // Reduced dependency array to prevent excessive re-runs
+  }, [session.id, session.archived, session.status, session.gitStatus]);
 
   const handleRunScript = useCallback(async (e: React.MouseEvent) => {
     e.stopPropagation();
     
     if (!hasRunScript) {
-      alert('No run script configured for this project.\n\nRun scripts are the commands needed to run your application so you can easily test changes.\n\nTo configure a run script:\n1. Click the settings icon (‚öôÔ∏è) next to your project (only shows on hover)\n\n2. Enter your \'Build Script\' to run at worktree creation (Optional)\n\n3. Enter your run script command(s) to run your application for testing');
+      setShowRunScriptConfig(true);
       return;
     }
 
@@ -476,7 +486,7 @@ export const SessionListItem = memo(function SessionListItem({ session, isNested
                   aria-label="Archive session"
                   icon={
                     isDeleting ? (
-                      <span className="text-text-tertiary">‚è≥</span>
+                      <span className="text-text-tertiary">‚è?/span>
                     ) : (
                       <Archive className="w-4 h-4 text-status-warning hover:text-status-warning" />
                     )
@@ -557,7 +567,7 @@ export const SessionListItem = memo(function SessionListItem({ session, isNested
         onClose={() => setShowArchiveConfirm(false)}
         onConfirm={handleConfirmArchive}
         title={`Archive Session`}
-        message={`Archive session "${session.name}"? This will:\n\n‚Ä¢ Move the session to the archived sessions list\n‚Ä¢ Preserve all session history and outputs\n${session.isMainRepo ? '‚Ä¢ Close the active Claude Code connection' : `‚Ä¢ Remove the git worktree locally (${session.worktreePath?.split('/').pop() || 'worktree'})`}`}
+        message={`Archive session "${session.name}"? This will:\n\n‚Ä?Move the session to the archived sessions list\n‚Ä?Preserve all session history and outputs\n${session.isMainRepo ? '‚Ä?Close the active Claude Code connection' : `‚Ä?Remove the git worktree locally (${session.worktreePath?.split('/').pop() || 'worktree'})`}`}
         confirmText="Archive"
         confirmButtonClass="bg-amber-600 hover:bg-amber-700 text-white"
         icon={<Archive className="w-6 h-6 text-amber-500 flex-shrink-0" />}
@@ -603,6 +613,11 @@ export const SessionListItem = memo(function SessionListItem({ session, isNested
           </div>
         )}
       </ConfirmDialog>
+      
+      <RunScriptConfigDialog
+        isOpen={showRunScriptConfig}
+        onClose={() => setShowRunScriptConfig(false)}
+      />
     </>
   );
 });

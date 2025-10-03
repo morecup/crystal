@@ -5,6 +5,18 @@ import { mkdir, rm, stat } from 'fs/promises';
 import { existsSync } from 'fs';
 import { getShellPath } from '../utils/shellPath';
 import { withLock } from '../utils/mutex';
+import type { ConfigManager } from './configManager';
+
+// Interface for raw commit data
+interface RawCommitData {
+  hash: string;
+  message: string;
+  date: string | Date;
+  author?: string;
+  additions?: number;
+  deletions?: number;
+  filesChanged?: number;
+}
 
 const execAsync = promisify(exec);
 
@@ -23,7 +35,7 @@ async function execWithShellPath(command: string, options?: { cwd?: string }): P
 export class WorktreeManager {
   private projectsCache: Map<string, { baseDir: string }> = new Map();
 
-  constructor() {
+  constructor(private configManager?: ConfigManager) {
     // No longer initialized with a single repo path
   }
 
@@ -71,13 +83,11 @@ export class WorktreeManager {
 
   async createWorktree(projectPath: string, name: string, branch?: string, baseBranch?: string, worktreeFolder?: string): Promise<{ worktreePath: string; baseCommit: string; baseBranch: string }> {
     return await withLock(`worktree-create-${projectPath}-${name}`, async () => {
-      console.log(`[WorktreeManager] Creating worktree: ${name} in project: ${projectPath}`);
       
       const { baseDir } = this.getProjectPaths(projectPath, worktreeFolder);
       const worktreePath = join(baseDir, name);
       const branchName = branch || name;
     
-    console.log(`[WorktreeManager] Worktree path: ${worktreePath}, branch: ${branchName}, base branch: ${baseBranch || 'HEAD'}`);
 
     try {
       // First check if this is a git repository
@@ -85,16 +95,12 @@ export class WorktreeManager {
       try {
         await execWithShellPath(`git rev-parse --is-inside-work-tree`, { cwd: projectPath });
         isGitRepo = true;
-        console.log(`[WorktreeManager] Directory is a git repository`);
       } catch (error) {
-        console.log(`[WorktreeManager] Directory is not a git repository, initializing...`);
         // Initialize git repository
         await execWithShellPath(`git init`, { cwd: projectPath });
-        console.log(`[WorktreeManager] Git repository initialized`);
       }
 
       // Clean up any existing worktree directory first
-      console.log(`[WorktreeManager] Cleaning up any existing worktree...`);
       try {
         // Use cross-platform approach without shell redirection
         try {
@@ -113,7 +119,6 @@ export class WorktreeManager {
         hasCommits = true;
       } catch (error) {
         // Repository has no commits yet, create initial commit
-        console.log(`[WorktreeManager] No commits found, creating initial commit...`);
         // Use cross-platform approach without shell operators
         try {
           await execWithShellPath(`git add -A`, { cwd: projectPath });
@@ -122,19 +127,15 @@ export class WorktreeManager {
         }
         await execWithShellPath(`git commit -m "Initial commit" --allow-empty`, { cwd: projectPath });
         hasCommits = true;
-        console.log(`[WorktreeManager] Initial commit created`);
       }
 
       // Check if branch already exists
-      console.log(`[WorktreeManager] Checking if branch ${branchName} exists...`);
       const checkBranchCmd = `git show-ref --verify --quiet refs/heads/${branchName}`;
       let branchExists = false;
       try {
         await execWithShellPath(checkBranchCmd, { cwd: projectPath });
         branchExists = true;
-        console.log(`[WorktreeManager] Branch ${branchName} already exists`);
       } catch {
-        console.log(`[WorktreeManager] Branch ${branchName} does not exist, will create it`);
         // Branch doesn't exist, will create it
       }
 
@@ -144,7 +145,6 @@ export class WorktreeManager {
       
       if (branchExists) {
         // Use existing branch
-        console.log(`[WorktreeManager] Adding worktree with existing branch...`);
         await execWithShellPath(`git worktree add "${worktreePath}" ${branchName}`, { cwd: projectPath });
         
         // Get the commit this branch is based on
@@ -154,13 +154,11 @@ export class WorktreeManager {
         // Create new branch from specified base branch (or current HEAD if not specified)
         const baseRef = baseBranch || 'HEAD';
         actualBaseBranch = baseBranch || 'HEAD';
-        console.log(`[WorktreeManager] Creating new branch from ${baseRef} and adding worktree...`);
         
         // Verify that the base branch exists if specified
         if (baseBranch) {
           try {
             await execWithShellPath(`git show-ref --verify --quiet refs/heads/${baseBranch}`, { cwd: projectPath });
-            console.log(`[WorktreeManager] Base branch ${baseBranch} exists`);
           } catch {
             throw new Error(`Base branch '${baseBranch}' does not exist`);
           }
@@ -168,7 +166,6 @@ export class WorktreeManager {
         
         // Capture the base commit before creating the worktree
         baseCommit = (await execWithShellPath(`git rev-parse ${baseRef}`, { cwd: projectPath })).stdout.trim();
-        console.log(`[WorktreeManager] Base commit: ${baseCommit}`);
         
         await execWithShellPath(`git worktree add -b ${branchName} "${worktreePath}" ${baseRef}`, { cwd: projectPath });
       }
@@ -190,8 +187,9 @@ export class WorktreeManager {
       
       try {
         await execWithShellPath(`git worktree remove "${worktreePath}" --force`, { cwd: projectPath });
-      } catch (error: any) {
-        const errorMessage = error.stderr || error.stdout || error.message || String(error);
+      } catch (error: unknown) {
+        const err = error as Error & { stderr?: string; stdout?: string };
+        const errorMessage = err.stderr || err.stdout || err.message || String(err);
         
         // If the worktree is not found, continue to filesystem cleanup below
         if (
@@ -336,13 +334,11 @@ export class WorktreeManager {
   }
 
   async getProjectMainBranch(projectPath: string): Promise<string> {
-    console.log(`[WorktreeManager] getProjectMainBranch called with path: ${projectPath}`);
     
     try {
       // ONLY check the current branch in the project root directory
       const currentBranchResult = await execWithShellPath(`git branch --show-current`, { cwd: projectPath });
       const currentBranch = currentBranchResult.stdout.trim();
-      console.log(`[WorktreeManager] Current branch in project directory: ${currentBranch}`);
       
       if (currentBranch) {
         return currentBranch;
@@ -397,12 +393,10 @@ export class WorktreeManager {
     canAutoMerge?: boolean;
   }> {
     try {
-      console.log(`[WorktreeManager] Checking for potential rebase conflicts with ${mainBranch} in ${worktreePath}`);
       
       // First check if there are any changes to rebase
       const hasChanges = await this.hasChangesToRebase(worktreePath, mainBranch);
       if (!hasChanges) {
-        console.log(`[WorktreeManager] No changes to rebase, no conflicts possible`);
         return { hasConflicts: false, canAutoMerge: true };
       }
 
@@ -412,7 +406,6 @@ export class WorktreeManager {
         { cwd: worktreePath }
       );
       const base = mergeBase.trim();
-      console.log(`[WorktreeManager] Merge base: ${base}`);
 
       // Try a dry-run merge to detect conflicts
       // We use merge-tree to check for conflicts without modifying the working tree
@@ -466,10 +459,10 @@ export class WorktreeManager {
           };
         }
         
-        console.log(`[WorktreeManager] No conflicts detected, rebase should succeed`);
         return { hasConflicts: false, canAutoMerge: true };
         
-      } catch (error: any) {
+      } catch (error: unknown) {
+        const err = error as Error & { stderr?: string; stdout?: string };
         // If merge-tree is not available (older git), fall back to checking modified files
         console.log(`[WorktreeManager] merge-tree not available, using fallback conflict detection`);
         
@@ -515,7 +508,7 @@ export class WorktreeManager {
         
         return { hasConflicts: false, canAutoMerge: true };
       }
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error(`[WorktreeManager] Error checking for rebase conflicts:`, error);
       // On error, return unknown status
       return { 
@@ -531,24 +524,27 @@ export class WorktreeManager {
       let lastOutput = '';
       
       try {
-        console.log(`[WorktreeManager] Rebasing ${mainBranch} into worktree: ${worktreePath}`);
         
         // Rebase the current worktree branch onto local main branch
         const command = `git rebase ${mainBranch}`;
         executedCommands.push(`${command} (in ${worktreePath})`);
         const rebaseResult = await execWithShellPath(command, { cwd: worktreePath });
         lastOutput = rebaseResult.stdout || rebaseResult.stderr || '';
-        
-        console.log(`[WorktreeManager] Successfully rebased ${mainBranch} into worktree`);
-      } catch (error: any) {
-        console.error(`[WorktreeManager] Failed to rebase ${mainBranch} into worktree:`, error);
+      } catch (error: unknown) {
+        const err = error as Error & { stderr?: string; stdout?: string };
+        console.error(`[WorktreeManager] Failed to rebase ${mainBranch} into worktree:`, err);
         
         // Create detailed error with git command output
-        const gitError = new Error(`Failed to rebase ${mainBranch} into worktree`) as any;
+        const gitError = new Error(`Failed to rebase ${mainBranch} into worktree`) as Error & {
+          gitCommand?: string;
+          gitOutput?: string;
+          workingDirectory?: string;
+          originalError?: Error;
+        };
         gitError.gitCommand = executedCommands.join(' && ');
-        gitError.gitOutput = error.stderr || error.stdout || lastOutput || error.message || '';
+        gitError.gitOutput = err.stderr || err.stdout || lastOutput || err.message || '';
         gitError.workingDirectory = worktreePath;
-        gitError.originalError = error;
+        gitError.originalError = err;
         
         throw gitError;
       }
@@ -557,8 +553,6 @@ export class WorktreeManager {
 
   async abortRebase(worktreePath: string): Promise<void> {
     try {
-      console.log(`[WorktreeManager] Aborting rebase in worktree: ${worktreePath}`);
-      
       // Check if we're in the middle of a rebase
       const statusCommand = `git status --porcelain=v1`;
       const { stdout: statusOut } = await execWithShellPath(statusCommand, { cwd: worktreePath });
@@ -570,11 +564,10 @@ export class WorktreeManager {
       if (stderr && !stderr.includes('No rebase in progress')) {
         throw new Error(`Failed to abort rebase: ${stderr}`);
       }
-      
-      console.log(`[WorktreeManager] Successfully aborted rebase`);
-    } catch (error: any) {
-      console.error(`[WorktreeManager] Error aborting rebase:`, error);
-      throw new Error(`Failed to abort rebase: ${error.message}`);
+    } catch (error: unknown) {
+      const err = error as Error;
+      console.error(`[WorktreeManager] Error aborting rebase:`, err);
+      throw new Error(`Failed to abort rebase: ${err.message}`);
     }
   }
 
@@ -592,7 +585,6 @@ export class WorktreeManager {
       const { stdout: currentBranch, stderr: stderr1 } = await execWithShellPath(command, { cwd: worktreePath });
       lastOutput = currentBranch || stderr1 || '';
       const branchName = currentBranch.trim();
-      console.log(`[WorktreeManager] Current branch: ${branchName}`);
       
       // Get the base commit (where the worktree branch diverged from main)
       command = `git merge-base ${mainBranch} HEAD`;
@@ -600,7 +592,6 @@ export class WorktreeManager {
       const { stdout: baseCommit, stderr: stderr2 } = await execWithShellPath(command, { cwd: worktreePath });
       lastOutput = baseCommit || stderr2 || '';
       const base = baseCommit.trim();
-      console.log(`[WorktreeManager] Base commit: ${base}`);
       
       // Check if there are any changes to squash
       command = `git log --oneline ${base}..HEAD`;
@@ -608,29 +599,36 @@ export class WorktreeManager {
       if (!commits.trim()) {
         throw new Error(`No commits to squash. The branch is already up to date with ${mainBranch}.`);
       }
-      console.log(`[WorktreeManager] Commits to squash:\n${commits}`);
       
       // Squash all commits since base into one
       command = `git reset --soft ${base}`;
       executedCommands.push(`git reset --soft ${base} (in ${worktreePath})`);
       const resetResult = await execWithShellPath(command, { cwd: worktreePath });
       lastOutput = resetResult.stdout || resetResult.stderr || '';
-      console.log(`[WorktreeManager] Reset to base commit`);
+      
+      // Get config to check if Crystal footer is enabled (default: true)
+      const config = this.configManager?.getConfig();
+      const enableCrystalFooter = config?.enableCrystalFooter !== false;
+      
+      // Add Crystal footer if enabled
+      const fullMessage = enableCrystalFooter ? `${commitMessage}
+
+💎 Built using [Crystal](https://github.com/stravu/crystal)
+
+Co-Authored-By: Crystal <crystal@stravu.com>` : commitMessage;
       
       // Properly escape commit message for cross-platform compatibility
-      const escapedMessage = commitMessage.replace(/"/g, '\\"');
+      const escapedMessage = fullMessage.replace(/"/g, '\\"');
       command = `git commit -m "${escapedMessage}"`;
       executedCommands.push(`git commit -m "..." (in ${worktreePath})`);
       const commitResult = await execWithShellPath(command, { cwd: worktreePath });
       lastOutput = commitResult.stdout || commitResult.stderr || '';
-      console.log(`[WorktreeManager] Created squashed commit`);
       
       // Switch to main branch in the main repository
       command = `git checkout ${mainBranch}`;
       executedCommands.push(`git checkout ${mainBranch} (in ${projectPath})`);
       const checkoutResult = await execWithShellPath(command, { cwd: projectPath });
       lastOutput = checkoutResult.stdout || checkoutResult.stderr || '';
-      console.log(`[WorktreeManager] Switched to ${mainBranch} in main repository`);
       
       // Rebase the squashed commit onto main
       command = `git rebase ${branchName}`;
@@ -640,16 +638,23 @@ export class WorktreeManager {
       console.log(`[WorktreeManager] Successfully rebased ${branchName} onto ${mainBranch}`);
       
       console.log(`[WorktreeManager] Successfully squashed and rebased worktree to ${mainBranch}`);
-    } catch (error: any) {
-      console.error(`[WorktreeManager] Failed to squash and rebase worktree to ${mainBranch}:`, error);
+    } catch (error: unknown) {
+      const err = error as Error & { stderr?: string; stdout?: string };
+      console.error(`[WorktreeManager] Failed to squash and rebase worktree to ${mainBranch}:`, err);
       
       // Create detailed error with git command output
-      const gitError = new Error(`Failed to squash and rebase worktree to ${mainBranch}`) as any;
+      const gitError = new Error(`Failed to squash and rebase worktree to ${mainBranch}`) as Error & {
+        gitCommands?: string[];
+        gitOutput?: string;
+        workingDirectory?: string;
+        projectPath?: string;
+        originalError?: Error;
+      };
       gitError.gitCommands = executedCommands;
-      gitError.gitOutput = error.stderr || error.stdout || lastOutput || error.message || '';
+      gitError.gitOutput = err.stderr || err.stdout || lastOutput || err.message || '';
       gitError.workingDirectory = worktreePath;
       gitError.projectPath = projectPath;
-      gitError.originalError = error;
+      gitError.originalError = err;
       
       throw gitError;
       }
@@ -670,7 +675,6 @@ export class WorktreeManager {
         const { stdout: currentBranch, stderr: stderr1 } = await execWithShellPath(command, { cwd: worktreePath });
         lastOutput = currentBranch || stderr1 || '';
         const branchName = currentBranch.trim();
-        console.log(`[WorktreeManager] Current branch: ${branchName}`);
         
         // Check if there are any changes to rebase
         command = `git log --oneline ${mainBranch}..HEAD`;
@@ -678,14 +682,12 @@ export class WorktreeManager {
         if (!commits.trim()) {
           throw new Error(`No commits to rebase. The branch is already up to date with ${mainBranch}.`);
         }
-        console.log(`[WorktreeManager] Commits to rebase:\n${commits}`);
         
         // Switch to main branch in the main repository
         command = `git checkout ${mainBranch}`;
         executedCommands.push(`git checkout ${mainBranch} (in ${projectPath})`);
         const checkoutResult = await execWithShellPath(command, { cwd: projectPath });
         lastOutput = checkoutResult.stdout || checkoutResult.stderr || '';
-        console.log(`[WorktreeManager] Switched to ${mainBranch} in main repository`);
         
         // Rebase the branch onto main (preserving all commits)
         command = `git rebase ${branchName}`;
@@ -695,16 +697,23 @@ export class WorktreeManager {
         console.log(`[WorktreeManager] Successfully rebased ${branchName} onto ${mainBranch}`);
         
         console.log(`[WorktreeManager] Successfully rebased worktree to ${mainBranch} (without squashing)`);
-      } catch (error: any) {
-        console.error(`[WorktreeManager] Failed to rebase worktree to ${mainBranch}:`, error);
+      } catch (error: unknown) {
+        const err = error as Error & { stderr?: string; stdout?: string };
+        console.error(`[WorktreeManager] Failed to rebase worktree to ${mainBranch}:`, err);
         
         // Create detailed error with git command output
-        const gitError = new Error(`Failed to rebase worktree to ${mainBranch}`) as any;
+        const gitError = new Error(`Failed to rebase worktree to ${mainBranch}`) as Error & {
+          gitCommands?: string[];
+          gitOutput?: string;
+          workingDirectory?: string;
+          projectPath?: string;
+          originalError?: Error;
+        };
         gitError.gitCommands = executedCommands;
-        gitError.gitOutput = error.stderr || error.stdout || lastOutput || error.message || '';
+        gitError.gitOutput = err.stderr || err.stdout || lastOutput || err.message || '';
         gitError.workingDirectory = worktreePath;
         gitError.projectPath = projectPath;
-        gitError.originalError = error;
+        gitError.originalError = err;
         
         throw gitError;
       }
@@ -738,10 +747,14 @@ export class WorktreeManager {
       const output = stdout || stderr || 'Pull completed successfully';
       
       return { output };
-    } catch (error: any) {
+    } catch (error: unknown) {
+      const err = error as Error & { stderr?: string; stdout?: string };
       // Create enhanced error with git details
-      const gitError = new Error(error.message || 'Git pull failed') as any;
-      gitError.gitOutput = error.stderr || error.stdout || error.message || '';
+      const gitError = new Error(err.message || 'Git pull failed') as Error & {
+        gitOutput?: string;
+        workingDirectory?: string;
+      };
+      gitError.gitOutput = err.stderr || err.stdout || err.message || '';
       gitError.workingDirectory = worktreePath;
       throw gitError;
     } finally {
@@ -760,10 +773,14 @@ export class WorktreeManager {
       const output = stdout || stderr || 'Push completed successfully';
       
       return { output };
-    } catch (error: any) {
+    } catch (error: unknown) {
+      const err = error as Error & { stderr?: string; stdout?: string };
       // Create enhanced error with git details
-      const gitError = new Error(error.message || 'Git push failed') as any;
-      gitError.gitOutput = error.stderr || error.stdout || error.message || '';
+      const gitError = new Error(err.message || 'Git push failed') as Error & {
+        gitOutput?: string;
+        workingDirectory?: string;
+      };
+      gitError.gitOutput = err.stderr || err.stdout || err.message || '';
       gitError.workingDirectory = worktreePath;
       throw gitError;
     } finally {
@@ -771,7 +788,7 @@ export class WorktreeManager {
     }
   }
 
-  async getLastCommits(worktreePath: string, count: number = 20): Promise<any[]> {
+  async getLastCommits(worktreePath: string, count: number = 20): Promise<RawCommitData[]> {
     const currentDir = process.cwd();
 
     try {
@@ -783,7 +800,7 @@ export class WorktreeManager {
       );
       
       // Parse the output
-      const commits: any[] = [];
+      const commits: RawCommitData[] = [];
       const lines = stdout.split('\n');
       let i = 0;
       
@@ -800,7 +817,7 @@ export class WorktreeManager {
         const date = (parts.pop() || '').trim();
         const message = parts.join('|');
 
-        const commit: any = {
+        const commit: RawCommitData = {
           hash: hash.trim(),
           message: message.trim(),
           date,
@@ -825,10 +842,14 @@ export class WorktreeManager {
       }
       
       return commits;
-    } catch (error: any) {
+    } catch (error: unknown) {
+      const err = error as Error & { stderr?: string; stdout?: string };
       // Create enhanced error with git details
-      const gitError = new Error(error.message || 'Failed to get commits') as any;
-      gitError.gitOutput = error.stderr || error.stdout || error.message || '';
+      const gitError = new Error(err.message || 'Failed to get commits') as Error & {
+        gitOutput?: string;
+        workingDirectory?: string;
+      };
+      gitError.gitOutput = err.stderr || err.stdout || err.message || '';
       gitError.workingDirectory = worktreePath;
       throw gitError;
     } finally {

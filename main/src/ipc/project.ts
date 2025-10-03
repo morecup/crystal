@@ -1,5 +1,6 @@
 import { IpcMain } from 'electron';
 import type { AppServices } from './types';
+import type { CreateProjectRequest, UpdateProjectRequest } from '../../../frontend/src/types/project';
 
 export function registerProjectHandlers(ipcMain: IpcMain, services: AppServices): void {
   const { databaseService, sessionManager, worktreeManager } = services;
@@ -24,7 +25,7 @@ export function registerProjectHandlers(ipcMain: IpcMain, services: AppServices)
     }
   });
 
-  ipcMain.handle('projects:create', async (_event, projectData: any) => {
+  ipcMain.handle('projects:create', async (_event, projectData: CreateProjectRequest) => {
     try {
       console.log('[Main] Creating project:', projectData);
 
@@ -123,7 +124,7 @@ export function registerProjectHandlers(ipcMain: IpcMain, services: AppServices)
         errorDetails = error.stack || error.toString();
 
         // Check if it's a command error
-        const cmdError = error as any;
+        const cmdError = error as Error & { cmd?: string; stderr?: string; stdout?: string };
         if (cmdError.cmd) {
           command = cmdError.cmd;
         }
@@ -159,7 +160,7 @@ export function registerProjectHandlers(ipcMain: IpcMain, services: AppServices)
     }
   });
 
-  ipcMain.handle('projects:update', async (_event, projectId: string, updates: any) => {
+  ipcMain.handle('projects:update', async (_event, projectId: string, updates: UpdateProjectRequest) => {
     try {
       // Update the project
       const project = databaseService.updateProject(parseInt(projectId), updates);
@@ -172,7 +173,8 @@ export function registerProjectHandlers(ipcMain: IpcMain, services: AppServices)
         databaseService.deleteProjectRunCommands(projectIdNum);
 
         // Add new run commands from the multiline script
-        if (updates.run_script) {
+        // Treat empty string and null the same - both mean no commands
+        if (updates.run_script && updates.run_script.trim()) {
           const commands = updates.run_script.split('\n').filter((cmd: string) => cmd.trim());
           commands.forEach((command: string, index: number) => {
             databaseService.createRunCommand(
@@ -201,8 +203,18 @@ export function registerProjectHandlers(ipcMain: IpcMain, services: AppServices)
     try {
       const projectIdNum = parseInt(projectId);
       
-      // Get all sessions for this project to check for running scripts
+      // Get the project to access its path
+      const project = databaseService.getProject(projectIdNum);
+      if (!project) {
+        console.error(`[Main] Project ${projectIdNum} not found`);
+        return { success: false, error: 'Project not found' };
+      }
+      
+      // Get all sessions for this project (including archived) to clean up worktrees
+      const allProjectSessions = databaseService.getAllSessionsIncludingArchived().filter(s => s.project_id === projectIdNum);
       const projectSessions = databaseService.getAllSessions(projectIdNum);
+      
+      console.log(`[Main] Deleting project ${project.name} with ${allProjectSessions.length} total sessions`);
       
       // Check if any session from this project has a running script
       const currentRunningSessionId = sessionManager.getCurrentRunningSessionId();
@@ -221,6 +233,26 @@ export function registerProjectHandlers(ipcMain: IpcMain, services: AppServices)
           await sessionManager.closeTerminalSession(session.id);
         }
       }
+      
+      // Clean up all worktrees for this project (including archived sessions)
+      let worktreeCleanupCount = 0;
+      for (const session of allProjectSessions) {
+        // Skip sessions that are main repo or don't have worktrees
+        if (session.is_main_repo || !session.worktree_name) {
+          continue;
+        }
+        
+        try {
+          console.log(`[Main] Removing worktree '${session.worktree_name}' for session ${session.id}`);
+          await worktreeManager.removeWorktree(project.path, session.worktree_name, project.worktree_folder || undefined);
+          worktreeCleanupCount++;
+        } catch (error) {
+          // Log error but continue with other worktrees
+          console.error(`[Main] Failed to remove worktree '${session.worktree_name}' for session ${session.id}:`, error);
+        }
+      }
+      
+      console.log(`[Main] Cleaned up ${worktreeCleanupCount} worktrees for project ${project.name}`);
       
       // Now safe to delete the project
       const success = databaseService.deleteProject(projectIdNum);

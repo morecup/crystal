@@ -17,6 +17,7 @@ import {
   logValidationFailure,
   createValidationError
 } from '../utils/sessionValidation';
+import type { SerializedArchiveTask } from '../services/archiveProgressManager';
 
 export function registerSessionHandlers(ipcMain: IpcMain, services: AppServices): void {
   const {
@@ -61,9 +62,7 @@ export function registerSessionHandlers(ipcMain: IpcMain, services: AppServices)
 
   ipcMain.handle('sessions:get', async (_event, sessionId: string) => {
     try {
-      console.log('[IPC] sessions:get called for sessionId:', sessionId);
       const session = await sessionManager.getSession(sessionId);
-      console.log('[IPC] sessions:get result:', session ? `Found session ${session.id}` : 'Session not found');
 
       if (!session) {
         return { success: false, error: 'Session not found' };
@@ -114,21 +113,6 @@ export function registerSessionHandlers(ipcMain: IpcMain, services: AppServices)
   });
 
   ipcMain.handle('sessions:create', async (_event, request: CreateSessionRequest) => {
-    console.log('[IPC] sessions:create handler called with request:', {
-      ...request,
-      prompt: request.prompt ? `${request.prompt.substring(0, 200)}... (${request.prompt.length} chars total)` : 'no prompt'
-    });
-    
-    // Log if prompt contains attachments
-    if (request.prompt && request.prompt.includes('<attachments>')) {
-      console.log('[IPC] Prompt contains <attachments> tag');
-      const attachmentStart = request.prompt.indexOf('<attachments>');
-      const attachmentEnd = request.prompt.indexOf('</attachments>');
-      if (attachmentStart !== -1 && attachmentEnd !== -1) {
-        const attachmentSection = request.prompt.substring(attachmentStart, attachmentEnd + '</attachments>'.length);
-        console.log('[IPC] Attachment section preview:', attachmentSection.substring(0, 300) + '...');
-      }
-    }
     try {
       let targetProject;
 
@@ -153,10 +137,8 @@ export function registerSessionHandlers(ipcMain: IpcMain, services: AppServices)
       }
 
       const count = request.count || 1;
-      console.log(`[IPC] Creating ${count} session(s) with prompt: "${request.prompt}"`);
 
       if (count > 1) {
-        console.log('[IPC] Creating multiple sessions...');
         const jobs = await taskQueue.createMultipleSessions(
           request.prompt,
           request.worktreeTemplate || '',
@@ -170,15 +152,14 @@ export function registerSessionHandlers(ipcMain: IpcMain, services: AppServices)
           request.toolType,
           request.commitMode,
           request.commitModeSettings,
-          request.codexConfig
+          request.codexConfig,
+          request.claudeConfig
         );
-        console.log(`[IPC] Created ${jobs.length} jobs:`, jobs.map(job => job.id));
         
         // Note: Model is now stored at panel level, not session level
         
         return { success: true, data: { jobIds: jobs.map(job => job.id) } };
       } else {
-        console.log('[IPC] Creating single session...');
         const job = await taskQueue.createSession({
           prompt: request.prompt,
           worktreeTemplate: request.worktreeTemplate || '',
@@ -191,9 +172,9 @@ export function registerSessionHandlers(ipcMain: IpcMain, services: AppServices)
           toolType: request.toolType,
           commitMode: request.commitMode,
           commitModeSettings: request.commitModeSettings,
-          codexConfig: request.codexConfig
+          codexConfig: request.codexConfig,
+          claudeConfig: request.claudeConfig
         });
-        console.log('[IPC] Created job with ID:', job.id);
         
         // Note: Model is now stored at panel level, not session level
         
@@ -213,7 +194,7 @@ export function registerSessionHandlers(ipcMain: IpcMain, services: AppServices)
         errorDetails = error.stack || error.toString();
 
         // Check if it's a git command error
-        const gitError = error as any;
+        const gitError = error as Error & { gitCommand?: string; cmd?: string; gitOutput?: string; stderr?: string };
         if (gitError.gitCommand) {
           command = gitError.gitCommand;
         } else if (gitError.cmd) {
@@ -274,20 +255,19 @@ export function registerSessionHandlers(ipcMain: IpcMain, services: AppServices)
           const project = databaseService.getProject(dbSession.project_id);
           if (project) {
             try {
-              console.log(`[Main] Removing worktree ${dbSession.worktree_name} for session ${sessionId} (queued)`);
-              
               // Update progress: removing worktree
               if (archiveProgressManager) {
                 archiveProgressManager.updateTaskStatus(sessionId, 'removing-worktree');
               }
               
               if (dbSession.worktree_path) {
+                // 优先使用绝对路径移除，兼容自定义 worktree 目录
                 await worktreeManager.removeWorktreeByPath(project.path, dbSession.worktree_path);
               } else {
-                await worktreeManager.removeWorktree(project.path, dbSession.worktree_name, project.worktree_folder);
+                // 回退到按名称移除，同时兼容可选的自定义 worktree 文件夹
+                await worktreeManager.removeWorktree(project.path, dbSession.worktree_name, project.worktree_folder || undefined);
               }
               
-              console.log(`[Main] Successfully removed worktree ${dbSession.worktree_name}`);
               cleanupMessage += `\x1b[32m✓ Worktree removed successfully\x1b[0m\r\n`;
               // Optional: delete branches as requested
               const deleteLocal = options?.deleteLocalBranch ?? true;
@@ -329,9 +309,6 @@ export function registerSessionHandlers(ipcMain: IpcMain, services: AppServices)
         const artifactsDir = getCrystalSubdirectory('artifacts', sessionId);
         if (existsSync(artifactsDir)) {
           try {
-            console.log('[IPC] Routing panels:send-input to ClaudePanelManager.sendInputToPanel');
-            console.log(`[Main] Removing artifacts directory for session ${sessionId} (queued)`);
-            
             // Update progress: cleaning artifacts
             if (archiveProgressManager) {
               archiveProgressManager.updateTaskStatus(sessionId, 'cleaning-artifacts');
@@ -339,7 +316,6 @@ export function registerSessionHandlers(ipcMain: IpcMain, services: AppServices)
             
             await fs.rm(artifactsDir, { recursive: true, force: true });
             
-            console.log(`[Main] Successfully removed artifacts for session ${sessionId}`);
             cleanupMessage += `\x1b[32m✓ Artifacts removed successfully\x1b[0m\r\n`;
           } catch (artifactsError) {
             console.error(`[Main] Failed to remove artifacts for session ${sessionId}:`, artifactsError);
@@ -360,15 +336,7 @@ export function registerSessionHandlers(ipcMain: IpcMain, services: AppServices)
       // Queue the cleanup task if we have worktree cleanup to do
       if (dbSession.worktree_name && dbSession.project_id && !dbSession.is_main_repo) {
         const project = databaseService.getProject(dbSession.project_id);
-        console.log('[Main] Archive progress tracking:', {
-          hasWorktree: !!dbSession.worktree_name,
-          projectId: dbSession.project_id,
-          isMainRepo: dbSession.is_main_repo,
-          project: !!project,
-          archiveProgressManager: !!archiveProgressManager
-        });
         if (project && archiveProgressManager) {
-          console.log('[Main] Adding archive task to queue for session:', sessionId);
           archiveProgressManager.addTask(
             sessionId,
             dbSession.name,
@@ -516,7 +484,7 @@ export function registerSessionHandlers(ipcMain: IpcMain, services: AppServices)
           const panelTitle = sessionToolType === 'codex' ? 'Codex' : 'Claude';
           await panelManager.createPanel({
             sessionId: sessionId,
-            type: sessionToolType as any,
+            type: sessionToolType as 'claude' | 'codex',
             title: panelTitle
           });
           console.log(`[IPC] Created ${sessionToolType} panel for session ${sessionId}`);
@@ -648,7 +616,7 @@ export function registerSessionHandlers(ipcMain: IpcMain, services: AppServices)
     }
   });
 
-  ipcMain.handle('sessions:continue', async (_event, sessionId: string, prompt?: string) => {
+  ipcMain.handle('sessions:continue', async (_event, sessionId: string, prompt?: string, model?: string) => {
     try {
       // Validate session exists and is active
       const sessionValidation = validateSessionIsActive(sessionId);
@@ -783,12 +751,25 @@ export function registerSessionHandlers(ipcMain: IpcMain, services: AppServices)
           const claudePanel = mainRepoClaudePanels[0];
           console.log(`[IPC] Starting Claude via panel ${claudePanel.id} for main repo session ${sessionId}`);
           // Model is now managed at panel level
-          await claudeCodeManager.startPanel(claudePanel.id, sessionId, session.worktreePath, continuePrompt, dbSession?.permission_mode);
+          await claudeCodeManager.startPanel(
+            claudePanel.id,
+            sessionId,
+            session.worktreePath,
+            continuePrompt,
+            dbSession?.permission_mode,
+            model
+          );
         } else {
           // Fallback to session-based start
           console.log(`[IPC] No Claude panels found, falling back to session-based start for ${sessionId}`);
           // Model is now managed at panel level  
-          await claudeCodeManager.startSession(sessionId, session.worktreePath, continuePrompt, dbSession?.permission_mode);
+          await claudeCodeManager.startSession(
+            sessionId,
+            session.worktreePath,
+            continuePrompt,
+            dbSession?.permission_mode,
+            model
+          );
         }
       } else {
         // Normal continue for existing sessions
@@ -805,12 +786,25 @@ export function registerSessionHandlers(ipcMain: IpcMain, services: AppServices)
           const claudePanel = normalContinueClaudePanels[0];
           // Model is now managed at panel level
           console.log(`[IPC] Continuing Claude via panel ${claudePanel.id} for session ${sessionId}`);
-          await claudeCodeManager.continuePanel(claudePanel.id, sessionId, session.worktreePath, continuePrompt, conversationHistory);
+          await claudeCodeManager.continuePanel(
+            claudePanel.id,
+            sessionId,
+            session.worktreePath,
+            continuePrompt,
+            conversationHistory,
+            model
+          );
         } else {
           // Fallback to session-based continue
           // Model is now managed at panel level
           console.log(`[IPC] No Claude panels found, continuing session ${sessionId}`);
-          await claudeCodeManager.continueSession(sessionId, session.worktreePath, continuePrompt, conversationHistory);
+          await claudeCodeManager.continueSession(
+            sessionId,
+            session.worktreePath,
+            continuePrompt,
+            conversationHistory,
+            model
+          );
         }
       }
 
@@ -900,7 +894,7 @@ export function registerSessionHandlers(ipcMain: IpcMain, services: AppServices)
         const transformedBatch = batch.map(output => {
           if (output.type === 'json') {
             // Generate formatted output from JSON
-            const outputText = formatJsonForOutputEnhanced(output.data);
+            const outputText = formatJsonForOutputEnhanced(output.data as Record<string, unknown>);
             if (outputText) {
               // Return as stdout for the Output view
               return {
@@ -1139,7 +1133,7 @@ export function registerSessionHandlers(ipcMain: IpcMain, services: AppServices)
     }
   });
 
-  ipcMain.handle('panels:continue', async (_event, panelId: string, input: string) => {
+  ipcMain.handle('panels:continue', async (_event, panelId: string, input: string, model?: string) => {
     try {
       console.log(`[IPC] panels:continue called for panel: ${panelId}`);
 
@@ -1243,7 +1237,13 @@ export function registerSessionHandlers(ipcMain: IpcMain, services: AppServices)
               console.log('[IPC] panels:continue starting fresh via startPanel (no running process, no claude_session_id)');
               const dbSession = sessionManager.getDbSession(panel.sessionId);
               // Model is now managed at panel level in Claude panel settings
-              await claudePanelManager.startPanel(panelId, session.worktreePath, input || '', dbSession?.permission_mode);
+              await claudePanelManager.startPanel(
+                panelId,
+                session.worktreePath,
+                input || '',
+                dbSession?.permission_mode,
+                model
+              );
               return { success: true };
             }
 
@@ -1253,7 +1253,13 @@ export function registerSessionHandlers(ipcMain: IpcMain, services: AppServices)
               : await sessionManager.getConversationMessages(panel.sessionId);
 
             // Model is now managed at panel level in Claude panel settings
-            await claudePanelManager.continuePanel(panelId, session.worktreePath, input || '', conversationHistory);
+            await claudePanelManager.continuePanel(
+              panelId,
+              session.worktreePath,
+              input || '',
+              conversationHistory,
+              model
+            );
             return { success: true };
           } catch (err) {
             console.error('Failed to continue Claude panel:', err);
@@ -1328,7 +1334,7 @@ export function registerSessionHandlers(ipcMain: IpcMain, services: AppServices)
         conversationMessages,
         promptMarkers,
         executionDiffs,
-        sessionOutputs: sessionOutputs as any // Type conversion needed
+        sessionOutputs: sessionOutputs
       });
       
       // Set flag to skip --resume on the next execution
@@ -1404,22 +1410,23 @@ export function registerSessionHandlers(ipcMain: IpcMain, services: AppServices)
         .filter(output => 
           output.type === 'json' || 
           output.type === 'error' ||
-          ((output.type === 'stdout' || output.type === 'stderr') && isGitOperation(output.data))
+          ((output.type === 'stdout' || output.type === 'stderr') && isGitOperation(output.data as string))
         )
         .map(output => {
           if (output.type === 'error') {
             // Transform error outputs to a format that RichOutputView can handle
+            const errorData = output.data as Record<string, unknown>;
             return {
               type: 'system',
               subtype: 'error',
               timestamp: output.timestamp.toISOString(),
-              error: output.data.error,
-              details: output.data.details,
-              message: `${output.data.error}${output.data.details ? '\n\n' + output.data.details : ''}`
+              error: errorData.error,
+              details: errorData.details,
+              message: `${errorData.error}${errorData.details ? '\n\n' + errorData.details : ''}`
             };
           } else if (output.type === 'stdout' || output.type === 'stderr') {
             // Transform git operation stdout/stderr to system messages that RichOutputView can display
-            const isError = output.type === 'stderr' || output.data.includes('failed:') || output.data.includes('✗');
+            const isError = output.type === 'stderr' || (output.data as string).includes('failed:') || (output.data as string).includes('✗');
             return {
               type: 'system',
               subtype: isError ? 'git_error' : 'git_operation',
@@ -1429,11 +1436,12 @@ export function registerSessionHandlers(ipcMain: IpcMain, services: AppServices)
               raw_output: output.data
             };
           } else {
-            // Regular JSON messages
+            // Regular JSON messages - safe to spread since we know it's a Record
+            const jsonData = output.data as Record<string, unknown>;
             return {
-              ...output.data,
+              ...jsonData,
               timestamp: output.timestamp.toISOString()
-            };
+            } as Record<string, unknown>;
           }
         });
       
@@ -1765,7 +1773,7 @@ export function registerSessionHandlers(ipcMain: IpcMain, services: AppServices)
       }
       
       const tasks = archiveProgressManager.getActiveTasks();
-      const activeCount = tasks.filter((t: any) => 
+      const activeCount = tasks.filter((t: SerializedArchiveTask) => 
         t.status !== 'completed' && t.status !== 'failed'
       ).length;
       
@@ -1902,6 +1910,18 @@ export function registerSessionHandlers(ipcMain: IpcMain, services: AppServices)
     } catch (error) {
       console.error('Failed to get session statistics:', error);
       return { success: false, error: 'Failed to get session statistics' };
+    }
+  });
+
+  // Set active session for smart git status polling
+  ipcMain.handle('sessions:set-active-session', async (event, sessionId: string | null) => {
+    try {
+      // Notify GitStatusManager about the active session change
+      gitStatusManager.setActiveSession(sessionId);
+      return { success: true };
+    } catch (error) {
+      console.error('Failed to set active session:', error);
+      return { success: false, error: 'Failed to set active session' };
     }
   });
 

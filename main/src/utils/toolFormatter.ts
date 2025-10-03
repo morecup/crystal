@@ -1,11 +1,12 @@
 import * as path from 'path';
 import { formatJsonForOutput } from './formatters';
+import type { ClaudeJsonMessage } from '../types/session';
 
 interface ToolCall {
   type: 'tool_use';
   id: string;
   name: string;
-  input: any;
+  input: Record<string, unknown>;
 }
 
 interface ToolResult {
@@ -19,13 +20,30 @@ interface PendingToolCall {
   timestamp: string;
 }
 
+interface TodoItem {
+  status: string;
+  content: string;
+}
+
+interface ThinkingItem {
+  type: 'thinking';
+  thinking?: string;
+}
+
+interface TextItem {
+  type: 'text';
+  text?: string;
+}
+
+type ContentItem = ThinkingItem | TextItem | ToolCall | ToolResult;
+
 // Store pending tool calls to match with their results
 const pendingToolCalls = new Map<string, PendingToolCall>();
 
 /**
  * Recursively filter out base64 data from any object structure
  */
-function filterBase64Data(obj: any): any {
+function filterBase64Data(obj: unknown): unknown {
   if (obj === null || obj === undefined) {
     return obj;
   }
@@ -37,20 +55,22 @@ function filterBase64Data(obj: any): any {
 
   // Handle objects
   if (typeof obj === 'object') {
-    const filtered: any = {};
+    const filtered: Record<string, unknown> = {};
+    const objRecord = obj as Record<string, unknown>;
     
-    for (const key in obj) {
-      if (Object.prototype.hasOwnProperty.call(obj, key)) {
+    for (const key in objRecord) {
+      if (Object.prototype.hasOwnProperty.call(objRecord, key)) {
         // Check if this is a base64 source object
-        if (key === 'source' && obj[key]?.type === 'base64' && obj[key]?.data) {
+        const sourceObj = objRecord[key] as Record<string, unknown>;
+        if (key === 'source' && sourceObj?.type === 'base64' && sourceObj?.data) {
           // Replace base64 data with placeholder
           filtered[key] = {
-            ...obj[key],
+            ...sourceObj,
             data: '[Base64 data filtered]'
           };
         } else {
           // Recursively filter nested objects
-          filtered[key] = filterBase64Data(obj[key]);
+          filtered[key] = filterBase64Data(objRecord[key]);
         }
       }
     }
@@ -65,22 +85,25 @@ function filterBase64Data(obj: any): any {
 /**
  * Convert absolute file paths to relative paths based on the git repository root
  */
-function makePathsRelative(content: any, gitRepoPath?: string): string {
+function makePathsRelative(content: unknown, gitRepoPath?: string): string {
   // Handle non-string content
+  let stringContent: string;
   if (typeof content !== 'string') {
     if (content === null || content === undefined) {
       return '';
     }
     // Convert to string if it's an object or array
-    content = typeof content === 'object' ? JSON.stringify(content, null, 2) : String(content);
+    stringContent = typeof content === 'object' ? JSON.stringify(content, null, 2) : String(content);
+  } else {
+    stringContent = content;
   }
   
-  if (!gitRepoPath) return content;
+  if (!gitRepoPath) return stringContent;
   
   // Match common file path patterns
   const pathRegex = /([\\/](?:Users|home|var|tmp|mnt|opt)[\\/][^\\s\\n]+)/g;
   
-  return content.replace(pathRegex, (match: string) => {
+  return stringContent.replace(pathRegex, (match: string) => {
     try {
       // Find the worktree path in the match
       const worktreeMatch = match.match(/\.?worktrees[\\/][^\\/]+/);
@@ -126,7 +149,15 @@ export function formatToolInteraction(
   }
   
   // Format the tool call header
-  let output = `\r\n\x1b[36m[${timestamp}]\x1b[0m \x1b[1m\x1b[33m🔧 Tool: ${toolCall.name}\x1b[0m\r\n`;
+  // Special header for slash commands
+  let output: string;
+  if (toolCall.name === 'SlashCommand') {
+    const command = toolCall.input.command || 'unknown';
+    console.log(`[slash-debug] Formatting SlashCommand tool: ${command}`);
+    output = `\r\n\x1b[36m[${timestamp}]\x1b[0m \x1b[1m\x1b[45m\x1b[97m ⚡ SLASH COMMAND \x1b[0m \x1b[1m\x1b[95m${command}\x1b[0m\r\n`;
+  } else {
+    output = `\r\n\x1b[36m[${timestamp}]\x1b[0m \x1b[1m\x1b[33m🔧 Tool: ${toolCall.name}\x1b[0m\r\n`;
+  }
   
   // Format parameters based on tool type
   if (toolCall.input && Object.keys(toolCall.input).length > 0) {
@@ -143,8 +174,9 @@ export function formatToolInteraction(
       }
     } else if (toolCall.name === 'Read' && toolCall.input.file_path) {
       output += `\x1b[90m│  File: ${makePathsRelative(toolCall.input.file_path, gitRepoPath)}\x1b[0m\r\n`;
-      if (toolCall.input.offset) {
-        output += `\x1b[90m│  Lines: ${toolCall.input.offset}-${toolCall.input.offset + (toolCall.input.limit || 2000)}\x1b[0m\r\n`;
+      if (toolCall.input.offset && typeof toolCall.input.offset === 'number') {
+        const limit = typeof toolCall.input.limit === 'number' ? toolCall.input.limit : 2000;
+        output += `\x1b[90m│  Lines: ${toolCall.input.offset}-${toolCall.input.offset + limit}\x1b[0m\r\n`;
       }
     } else if (toolCall.name === 'Edit' && toolCall.input.file_path) {
       output += `\x1b[90m│  File: ${makePathsRelative(toolCall.input.file_path, gitRepoPath)}\x1b[0m\r\n`;
@@ -153,14 +185,15 @@ export function formatToolInteraction(
       output += `\x1b[90m│  $ ${toolCall.input.command}\x1b[0m\r\n`;
     } else if (toolCall.name === 'TodoWrite' && toolCall.input.todos) {
       output += `\x1b[90m│  Tasks updated:\x1b[0m\r\n`;
-      toolCall.input.todos.forEach((todo: any) => {
+      (toolCall.input.todos as Array<{status: string; content: string}>).forEach((todo) => {
         const status = todo.status === 'completed' ? '✓' : todo.status === 'in_progress' ? '→' : '○';
         const statusColor = todo.status === 'completed' ? '\x1b[32m' : todo.status === 'in_progress' ? '\x1b[33m' : '\x1b[90m';
         output += `\x1b[90m│    ${statusColor}${status}\x1b[0m ${todo.content}\x1b[0m\r\n`;
       });
     } else if (toolCall.name === 'Write' && toolCall.input.file_path) {
       output += `\x1b[90m│  File: ${makePathsRelative(toolCall.input.file_path, gitRepoPath)}\x1b[0m\r\n`;
-      const lines = toolCall.input.content?.split('\n') || [];
+      const content = typeof toolCall.input.content === 'string' ? toolCall.input.content : '';
+      const lines = content.split('\n');
       output += `\x1b[90m│  Size: ${lines.length} lines\x1b[0m\r\n`;
     } else if (toolCall.name === 'Glob' && toolCall.input.pattern) {
       output += `\x1b[90m│  Pattern: ${toolCall.input.pattern}\x1b[0m\r\n`;
@@ -169,19 +202,26 @@ export function formatToolInteraction(
       }
     } else if (toolCall.name === 'MultiEdit' && toolCall.input.file_path) {
       output += `\x1b[90m│  File: ${makePathsRelative(toolCall.input.file_path, gitRepoPath)}\x1b[0m\r\n`;
-      output += `\x1b[90m│  Edits: ${toolCall.input.edits?.length || 0} changes\x1b[0m\r\n`;
+      const edits = Array.isArray(toolCall.input.edits) ? toolCall.input.edits : [];
+      output += `\x1b[90m│  Edits: ${edits.length} changes\x1b[0m\r\n`;
     } else if (toolCall.name === 'Task' && toolCall.input.prompt) {
-      const prompt = toolCall.input.prompt;
+      const prompt = String(toolCall.input.prompt);
       const truncated = prompt.length > 100 ? prompt.substring(0, 100) + '...' : prompt;
       output += `\x1b[90m│  Description: ${toolCall.input.description || 'Task'}\x1b[0m\r\n`;
       output += `\x1b[90m│  Prompt: ${truncated}\x1b[0m\r\n`;
     } else if (toolCall.name === 'LS' && toolCall.input.path) {
       output += `\x1b[90m│  Path: ${makePathsRelative(toolCall.input.path, gitRepoPath)}\x1b[0m\r\n`;
-      if (toolCall.input.ignore?.length) {
-        output += `\x1b[90m│  Ignoring: ${toolCall.input.ignore.join(', ')}\x1b[0m\r\n`;
+      const ignoreList = Array.isArray(toolCall.input.ignore) ? toolCall.input.ignore : [];
+      if (ignoreList.length) {
+        output += `\x1b[90m│  Ignoring: ${ignoreList.join(', ')}\x1b[0m\r\n`;
       }
     } else if (toolCall.name === 'TodoRead') {
       output += `\x1b[90m│  Reading current task list...\x1b[0m\r\n`;
+    } else if (toolCall.name === 'SlashCommand' && toolCall.input.command) {
+      // Special logging for slash commands with [slash-debug] prefix
+      console.log(`[slash-debug] SlashCommand tool invoked: ${toolCall.input.command}`);
+      output += `\x1b[90m│  \x1b[0m\x1b[95mCommand: ${toolCall.input.command}\x1b[0m\r\n`;
+      console.log(`[slash-debug] SlashCommand details:`, JSON.stringify(toolCall.input, null, 2));
     } else {
       // Generic parameter display
       const paramStr = JSON.stringify(toolCall.input, null, 2);
@@ -372,11 +412,11 @@ export function formatToolInteraction(
 /**
  * Enhanced JSON to output formatter that unifies tool calls and responses
  */
-export function formatJsonForOutputEnhanced(jsonMessage: any, gitRepoPath?: string): string {
+export function formatJsonForOutputEnhanced(jsonMessage: Record<string, unknown>, gitRepoPath?: string): string {
   // Ensure we have a valid timestamp
   let timestamp: string;
   try {
-    if (jsonMessage.timestamp) {
+    if (jsonMessage.timestamp && typeof jsonMessage.timestamp === 'string') {
       // Validate the provided timestamp
       const date = new Date(jsonMessage.timestamp);
       if (isNaN(date.getTime())) {
@@ -393,16 +433,17 @@ export function formatJsonForOutputEnhanced(jsonMessage: any, gitRepoPath?: stri
   }
   
   // Handle messages from assistant
-  if (jsonMessage.type === 'assistant' && jsonMessage.message?.content) {
-    const content = jsonMessage.message.content;
+  if (jsonMessage.type === 'assistant') {
+    const messageObj = jsonMessage.message as {content?: unknown} | undefined;
+    const content = messageObj?.content;
     
     if (Array.isArray(content)) {
       let output = '';
       
       // First, handle thinking messages
-      const thinkingItems = content.filter((item: any) => item.type === 'thinking');
+      const thinkingItems = content.filter((item: ContentItem): item is ThinkingItem => item.type === 'thinking');
       if (thinkingItems.length > 0) {
-        thinkingItems.forEach((item: any) => {
+        thinkingItems.forEach((item: ThinkingItem) => {
           const time = (() => {
             try {
               const date = new Date(timestamp);
@@ -426,7 +467,7 @@ export function formatJsonForOutputEnhanced(jsonMessage: any, gitRepoPath?: stri
       }
       
       // Then handle tool uses
-      const toolUses = content.filter((item: any) => item.type === 'tool_use');
+      const toolUses = content.filter((item: ContentItem): item is ToolCall => item.type === 'tool_use');
       if (toolUses.length > 0) {
         // Store tool calls for later matching
         toolUses.forEach((toolUse: ToolCall) => {
@@ -446,8 +487,8 @@ export function formatJsonForOutputEnhanced(jsonMessage: any, gitRepoPath?: stri
       
       // Finally, handle regular text content
       const textContent = content
-        .filter((item: any) => item.type === 'text')
-        .map((item: any) => item.text)
+        .filter((item: ContentItem): item is TextItem => item.type === 'text')
+        .map((item: TextItem) => item.text || '')
         .join('\n\n');
       
       if (textContent) {
@@ -471,11 +512,12 @@ export function formatJsonForOutputEnhanced(jsonMessage: any, gitRepoPath?: stri
   }
   
   // Handle tool results from user
-  if (jsonMessage.type === 'user' && jsonMessage.message?.content) {
-    const content = jsonMessage.message.content;
+  if (jsonMessage.type === 'user') {
+    const messageObj = jsonMessage.message as {content?: unknown} | undefined;
+    const content = messageObj?.content;
     
     if (Array.isArray(content)) {
-      const toolResults = content.filter((item: any) => item.type === 'tool_result');
+      const toolResults = content.filter((item: ContentItem): item is ToolResult => item.type === 'tool_result');
       
       if (toolResults.length > 0) {
         // Match results with pending calls and format them
@@ -527,8 +569,8 @@ export function formatJsonForOutputEnhanced(jsonMessage: any, gitRepoPath?: stri
       
       // Handle regular text content from user
       const textContent = content
-        .filter((item: any) => item.type === 'text')
-        .map((item: any) => item.text)
+        .filter((item: ContentItem): item is TextItem => item.type === 'text')
+        .map((item: TextItem) => item.text || '')
         .join(' ');
       
       if (textContent) {
@@ -551,7 +593,7 @@ export function formatJsonForOutputEnhanced(jsonMessage: any, gitRepoPath?: stri
   
   // Handle session messages (like errors)
   if (jsonMessage.type === 'session') {
-    const data = jsonMessage.data || {};
+    const data = (jsonMessage.data as {status?: string; message?: string; details?: string}) || {};
     const time = (() => {
       try {
         const date = new Date(timestamp);
@@ -571,7 +613,7 @@ export function formatJsonForOutputEnhanced(jsonMessage: any, gitRepoPath?: stri
   }
   
   // Fall back to original formatter for other message types
-  return formatJsonForOutput(jsonMessage);
+  return formatJsonForOutput(jsonMessage as ClaudeJsonMessage);
 }
 
 // Re-export the original formatter for backwards compatibility

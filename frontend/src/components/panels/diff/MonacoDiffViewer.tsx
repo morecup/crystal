@@ -2,9 +2,14 @@ import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react'
 import { DiffEditor, loader, type DiffEditorProps, type MonacoDiffEditor } from '@monaco-editor/react';
 import { AlertCircle, FileText, Check, Loader2, Eye, Code } from 'lucide-react';
 import type { FileDiff } from '../../../types/diff';
-import { debounce } from '../../../utils/debounce';
+import { debounce, type DebouncedFunction } from '../../../utils/debounce';
 import { MonacoErrorBoundary } from '../../MonacoErrorBoundary';
 import { MarkdownPreview } from '../../MarkdownPreview';
+import type * as monaco from 'monaco-editor';
+
+interface IDisposable {
+  dispose(): void;
+}
 
 interface MonacoDiffViewerProps {
   file: FileDiff;
@@ -37,7 +42,7 @@ export const MonacoDiffViewer: React.FC<MonacoDiffViewerProps> = ({
   const [isFullContentLoaded, setIsFullContentLoaded] = useState(false);
   const [editorHeight, setEditorHeight] = useState<number>(400); // Default height
   const containerRef = useRef<HTMLDivElement>(null);
-  const debouncedSaveRef = useRef<any>(null);
+  const debouncedSaveRef = useRef<DebouncedFunction<(content: string) => Promise<void>> | null>(null);
   const [viewMode, setViewMode] = useState<'diff' | 'preview' | 'split'>('diff');
   const [previewHeight, setPreviewHeight] = useState<number>(600); // Default preview height
   const previewRef = useRef<HTMLDivElement>(null);
@@ -328,11 +333,11 @@ export const MonacoDiffViewer: React.FC<MonacoDiffViewerProps> = ({
       
       setEditorHeight(calculatedHeight);
     } catch (error) {
-      console.debug('Error calculating editor height:', error);
+      // Error calculating editor height - debug logging removed
     }
   }, []);
 
-  const handleBeforeMount = useCallback((_monaco: any) => {
+  const handleBeforeMount = useCallback((_monaco: typeof monaco) => {
     // Temporarily commented out to test built-in themes
     // // Define custom themes before the editor mounts
     // monaco.editor.defineTheme('crystal-dark', {
@@ -368,7 +373,7 @@ export const MonacoDiffViewer: React.FC<MonacoDiffViewerProps> = ({
     // });
   }, []);
 
-  const handleEditorDidMount: DiffEditorProps['onMount'] = useCallback((editor: MonacoDiffEditor, monaco: any) => {
+  const handleEditorDidMount: DiffEditorProps['onMount'] = useCallback((editor: MonacoDiffEditor, monacoInstance: typeof monaco) => {
     try {
       editorRef.current = editor;
       
@@ -376,7 +381,7 @@ export const MonacoDiffViewer: React.FC<MonacoDiffViewerProps> = ({
       const modifiedEditor = editor.getModifiedEditor();
       
       // Store disposables for cleanup
-      const disposables: any[] = [];
+      const disposables: IDisposable[] = [];
       
       // Mark editor as ready
       setIsEditorReady(true);
@@ -428,7 +433,7 @@ export const MonacoDiffViewer: React.FC<MonacoDiffViewerProps> = ({
 
       // Add save keyboard shortcut for immediate save
       const commandDisposable = modifiedEditor.addCommand(
-        monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS,
+        monacoInstance.KeyMod.CtrlCmd | monacoInstance.KeyCode.KeyS,
         () => {
           // Check if editor and model still exist
           if (!editorRef.current || !modifiedEditor.getModel()) {
@@ -451,7 +456,7 @@ export const MonacoDiffViewer: React.FC<MonacoDiffViewerProps> = ({
     }
     
     // Store disposables for cleanup
-    (editor as any).__disposables = disposables;
+    (editor as MonacoDiffEditor & { __disposables?: IDisposable[] }).__disposables = disposables;
     } catch (error) {
       console.error('Error mounting Monaco editor:', error);
       setIsEditorReady(false);
@@ -552,11 +557,25 @@ export const MonacoDiffViewer: React.FC<MonacoDiffViewerProps> = ({
     };
   }, [currentContent, viewMode, isMarkdownFile]);
 
+  // Also flush pending saves when switching sessions
+  useEffect(() => {
+    const handleSessionSwitch = () => {
+      if (debouncedSaveRef.current?.flush) {
+        debouncedSaveRef.current.flush(); // Save before switching sessions
+      }
+    };
+    
+    window.addEventListener('session-switched', handleSessionSwitch);
+    return () => {
+      window.removeEventListener('session-switched', handleSessionSwitch);
+    };
+  }, []); // Empty deps - only create once
+  
   // Cleanup on unmount or when key props change
   useEffect(() => {
     return () => {
-      // Cancel any pending saves
-      debouncedSaveRef.current?.cancel?.();
+      // Flush any pending saves before unmount
+      debouncedSaveRef.current?.flush();
       
       // Clear timeout
       if (savedTimeoutRef.current) {
@@ -567,9 +586,9 @@ export const MonacoDiffViewer: React.FC<MonacoDiffViewerProps> = ({
       if (editorRef.current) {
         try {
           // Dispose event handlers first
-          const editor = editorRef.current as any;
+          const editor = editorRef.current as MonacoDiffEditor & { __disposables?: IDisposable[] };
           if (editor.__disposables) {
-            editor.__disposables.forEach((d: any) => {
+            editor.__disposables.forEach((d: IDisposable) => {
               try {
                 d.dispose();
               } catch (error) {
