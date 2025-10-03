@@ -1,4 +1,4 @@
-// Load ReadableStream polyfill before any other imports
+﻿// Load ReadableStream polyfill before any other imports
 import './polyfills/readablestream';
 
 // Fix GTK 2/3 and GTK 4 conflict on Linux (Electron 36 issue)
@@ -141,7 +141,7 @@ async function createWindow() {
   mainWindow.webContents.setMaxListeners(100);
 
   if (isDevelopment) {
-    await mainWindow.loadURL('http://localhost:4521');
+    await mainWindow.loadURL('http://localhost:4690');
     mainWindow.webContents.openDevTools();
     
     // Enable IPC debugging in development
