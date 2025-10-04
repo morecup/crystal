@@ -6,7 +6,8 @@ import { FileList } from '../../FileList';
 import { API } from '../../../utils/api';
 import type { CombinedDiffViewProps } from '../../../types/diff';
 import type { ExecutionDiff, GitDiffResult } from '../../../types/diff';
-import { Maximize2, Minimize2, RefreshCw } from 'lucide-react';
+import { Maximize2, Minimize2, RefreshCw, Settings as SettingsIcon } from 'lucide-react';
+import DiffSettings from './DiffSettings';
 import DeleteLastCommitDialog from '../../DeleteLastCommitDialog';
 import { parseFilesFromDiff, validateParsedFiles } from '../../../utils/diffParser';
 
@@ -32,6 +33,7 @@ const CombinedDiffView: React.FC<CombinedDiffViewProps> = memo(({
   const [lastVisibleState, setLastVisibleState] = useState<boolean>(isVisible);
   const [forceRefresh, setForceRefresh] = useState<number>(0);
   const [selectedFile, setSelectedFile] = useState<string | undefined>();
+  const [showDiffSettings, setShowDiffSettings] = useState(false);
   // 计算未提交变更的文件数量（来自 Git 实时状态，而非本地编辑计数）
   const uncommittedFileCount = useMemo(() => {
     const uncommitted = executions.find(e => e.id === 0);
@@ -588,6 +590,13 @@ const CombinedDiffView: React.FC<CombinedDiffViewProps> = memo(({
             <RefreshCw className={`w-5 h-5 text-text-secondary ${loading ? 'animate-spin' : ''}`} />
           </button>
           <button
+            onClick={() => setShowDiffSettings(true)}
+            className="p-2 rounded hover:bg-surface-hover transition-colors"
+            title="Diff settings"
+          >
+            <SettingsIcon className="w-5 h-5 text-text-secondary" />
+          </button>
+          <button
             onClick={toggleFullscreen}
             className="p-2 rounded hover:bg-surface-hover transition-colors"
             title={isFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}
@@ -728,6 +737,9 @@ const CombinedDiffView: React.FC<CombinedDiffViewProps> = memo(({
         // 使用 Git 实际未提交变更文件数量，避免一直显示为 0
         fileCount={uncommittedFileCount}
       />
+
+      {/* Diff Settings */}
+      <DiffSettings isOpen={showDiffSettings} onClose={() => setShowDiffSettings(false)} />
     </div>
   );
 }, (prevProps, nextProps) => {

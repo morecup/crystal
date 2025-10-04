@@ -12,6 +12,13 @@ export interface AppConfig {
   theme?: 'light' | 'dark';
   // 是否忽略 Monaco 初始化异常（启用后将不弹出错误对话框）
   ignoreMonacoInitErrors?: boolean;
+  // Diff 视图相关设置
+  diffSettings?: {
+    // 单文件差异渲染软上限（字节）
+    maxFileBytes?: number;
+    // 文件内容读取并发上限
+    maxParallelReads?: number;
+  };
   notifications?: {
     enabled: boolean;
     playSound: boolean;

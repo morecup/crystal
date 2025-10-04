@@ -25,6 +25,10 @@ export class ConfigManager extends EventEmitter {
       defaultModel: 'sonnet',
       stravuApiKey: undefined,
       stravuServerUrl: 'https://api.stravu.com',
+      diffSettings: {
+        maxFileBytes: 5 * 1024 * 1024, // 5MB
+        maxParallelReads: 3,
+      },
       notifications: {
         enabled: true,
         playSound: true,
@@ -69,6 +73,10 @@ export class ConfigManager extends EventEmitter {
       this.config = {
         ...this.config,
         ...loadedConfig,
+        diffSettings: {
+          ...this.config.diffSettings,
+          ...loadedConfig.diffSettings,
+        },
         notifications: {
           ...this.config.notifications,
           ...loadedConfig.notifications

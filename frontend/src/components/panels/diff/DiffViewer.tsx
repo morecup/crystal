@@ -4,22 +4,13 @@ import { FileText, ChevronRight, ChevronDown } from 'lucide-react';
 import type { DiffViewerProps } from '../../../types/diff';
 import type { FileDiff } from '../../../types/diff';
 import { useTheme } from '../../../contexts/ThemeContext';
+import { useConfigStore } from '../../../stores/configStore';
 
 // 软上限：单个文件差异超过该大小时不渲染，单位：字节（按字符串长度近似）
 const DEFAULT_MAX_FILE_DIFF_BYTES = 5 * 1024 * 1024; // 5MB
-// 并发上限：批量读取文件内容时的最大并发，避免瞬时内存峰值
-const MAX_PARALLEL_FILE_READS = 3;
-
-// 允许通过 localStorage 来覆盖软上限值（便于高级用户调优）
-function getMaxFileDiffBytes(): number {
-  const raw = typeof window !== 'undefined' ? window.localStorage?.getItem('diff.maxFileBytes') : null;
-  if (!raw) return DEFAULT_MAX_FILE_DIFF_BYTES;
-  const n = Number(raw);
-  return Number.isFinite(n) && n > 0 ? n : DEFAULT_MAX_FILE_DIFF_BYTES;
-}
 
 // Parse unified diff format to extract individual file diffs
-const parseUnifiedDiff = (diff: string): FileDiff[] => {
+const parseUnifiedDiff = (diff: string, maxBytes: number): FileDiff[] => {
   const files: FileDiff[] = [];
   
   if (!diff || diff.trim().length === 0) {
@@ -38,8 +29,6 @@ const parseUnifiedDiff = (diff: string): FileDiff[] => {
   
   console.log('parseUnifiedDiff: Found', fileMatches.length, 'file(s) in diff');
   
-  const maxBytes = getMaxFileDiffBytes();
-
   for (const fileContent of fileMatches) {
     // Try multiple patterns to extract file names
     let fileNameMatch = fileContent.match(/diff --git a\/(.*?) b\/(.*?)(?:\n|$)/);
@@ -194,6 +183,7 @@ export interface DiffViewerHandle {
 
 const DiffViewer = memo(forwardRef<DiffViewerHandle, DiffViewerProps>(({ diff, sessionId, className = '', onFileSave, isAllCommitsSelected = true, mainBranch = 'main' }, ref) => {
   const { theme } = useTheme();
+  const { config } = useConfigStore();
   const [viewType, setViewType] = useState<'split' | 'inline'>('split');
   const [expandedFiles, setExpandedFiles] = useState<Set<string>>(new Set());
   const [filesWithFullContent, setFilesWithFullContent] = useState<FileDiff[]>([]);
@@ -213,14 +203,32 @@ const DiffViewer = memo(forwardRef<DiffViewerHandle, DiffViewerProps>(({ diff, s
     localStorage.setItem('diffViewType', type);
   };
 
+  const maxBytes = useMemo(() => {
+    const fromConfig = config?.diffSettings?.maxFileBytes;
+    if (typeof fromConfig === 'number' && fromConfig > 0) return fromConfig;
+    // 兼容旧覆盖方式
+    const raw = typeof window !== 'undefined' ? window.localStorage?.getItem('diff.maxFileBytes') : null;
+    if (raw) {
+      const n = Number(raw);
+      if (Number.isFinite(n) && n > 0) return n;
+    }
+    return DEFAULT_MAX_FILE_DIFF_BYTES;
+  }, [config]);
+
+  const parallelLimit = useMemo(() => {
+    const n = config?.diffSettings?.maxParallelReads;
+    if (typeof n === 'number' && n > 0) return n;
+    return 3;
+  }, [config]);
+
   const files = useMemo(() => {
     try {
-      return parseUnifiedDiff(diff || '');
+      return parseUnifiedDiff(diff || '', maxBytes);
     } catch (error) {
       console.error('Error parsing diff:', error);
       return [];
     }
-  }, [diff]);
+  }, [diff, maxBytes]);
 
   // 简单的并发控制器，限制批量任务并发度
   async function mapWithConcurrency<T, R>(items: T[], limit: number, mapper: (item: T, index: number) => Promise<R>): Promise<R[]> {
@@ -267,7 +275,7 @@ const DiffViewer = memo(forwardRef<DiffViewerHandle, DiffViewerProps>(({ diff, s
         const errors: Record<string, string> = {};
         const updatedFiles = await mapWithConcurrency(
           files,
-          MAX_PARALLEL_FILE_READS,
+          parallelLimit,
           async (file) => {
             // Skip binary files, deleted files, or files that already seem to have full content
             if (file.isBinary || file.type === 'deleted' || !file.path) {
@@ -557,12 +565,12 @@ const DiffViewer = memo(forwardRef<DiffViewerHandle, DiffViewerProps>(({ diff, s
                           <div>
                             <p className="text-sm font-medium text-text-primary">当前文件过大，已禁用渲染（避免 OOM）</p>
                             <p className="text-xs text-text-tertiary mt-1">
-                              估算大小：{((file.approxSize || 0) / (1024 * 1024)).toFixed(2)} MB（上限 { (getMaxFileDiffBytes() / (1024 * 1024)).toFixed(0) } MB）。
+                              估算大小：{((file.approxSize || 0) / (1024 * 1024)).toFixed(2)} MB（上限 { (maxBytes / (1024 * 1024)).toFixed(0) } MB）。
                             </p>
                             <ul className="list-disc list-inside mt-2 text-xs text-text-secondary space-y-1">
                               <li>已保留该文件的增删行统计，供概要查看</li>
                               <li>如需查看内容，建议用外部编辑器打开文件</li>
-                              <li>可在 localStorage 设置键 `diff.maxFileBytes` 调整阈值</li>
+                              <li>可在 Diff 设置面板调整阈值与并发</li>
                             </ul>
                           </div>
                         </div>

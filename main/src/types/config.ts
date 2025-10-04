@@ -23,6 +23,13 @@ export interface AppConfig {
   theme?: 'light' | 'dark';
   // Ignore Monaco init errors (suppress popup)
   ignoreMonacoInitErrors?: boolean;
+  // Diff settings
+  diffSettings?: {
+    // Soft limit for single file diff rendering (bytes)
+    maxFileBytes?: number;
+    // Max parallel reads when loading file contents in diff view
+    maxParallelReads?: number;
+  };
   // Notification settings
   notifications?: {
     enabled: boolean;
@@ -76,6 +83,10 @@ export interface UpdateConfigRequest {
   stravuServerUrl?: string;
   theme?: 'light' | 'dark';
   ignoreMonacoInitErrors?: boolean;
+  diffSettings?: {
+    maxFileBytes?: number;
+    maxParallelReads?: number;
+  };
   notifications?: {
     enabled: boolean;
     playSound: boolean;
