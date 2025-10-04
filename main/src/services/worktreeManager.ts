@@ -745,7 +745,6 @@ Co-Authored-By: Crystal <crystal@stravu.com>` : commitMessage;
       // Run git pull
       const { stdout, stderr } = await execWithShellPath('git pull');
       const output = stdout || stderr || 'Pull completed successfully';
-      
       return { output };
     } catch (error: unknown) {
       const err = error as Error & { stderr?: string; stdout?: string };
@@ -756,6 +755,28 @@ Co-Authored-By: Crystal <crystal@stravu.com>` : commitMessage;
       };
       gitError.gitOutput = err.stderr || err.stdout || err.message || '';
       gitError.workingDirectory = worktreePath;
+      // 自动处理无上游跟踪的情况：设置 upstream 后重试
+      if (
+        gitError.gitOutput?.includes('There is no tracking information for the current branch') ||
+        gitError.gitOutput?.includes('no upstream')
+      ) {
+        try {
+          const { stdout: branchOut } = await execWithShellPath('git branch --show-current', { cwd: worktreePath });
+          const branch = (branchOut || '').trim();
+          if (branch) {
+            try {
+              await execWithShellPath(`git branch --set-upstream-to=origin/${branch} ${branch}`, { cwd: worktreePath });
+            } catch {
+              // If setting upstream fails, continue to rethrow
+            }
+            const { stdout: pullStd, stderr: pullErr } = await execWithShellPath('git pull', { cwd: worktreePath });
+            const out = pullStd || pullErr || `Pull completed successfully (after setting upstream to origin/${branch})`;
+            return { output: out };
+          }
+        } catch {
+          // fallthrough to throw
+        }
+      }
       throw gitError;
     } finally {
       process.chdir(currentDir);
@@ -771,7 +792,6 @@ Co-Authored-By: Crystal <crystal@stravu.com>` : commitMessage;
       // Run git push
       const { stdout, stderr } = await execWithShellPath('git push');
       const output = stdout || stderr || 'Push completed successfully';
-      
       return { output };
     } catch (error: unknown) {
       const err = error as Error & { stderr?: string; stdout?: string };
@@ -782,6 +802,23 @@ Co-Authored-By: Crystal <crystal@stravu.com>` : commitMessage;
       };
       gitError.gitOutput = err.stderr || err.stdout || err.message || '';
       gitError.workingDirectory = worktreePath;
+      // 自动处理无上游分支的情况：首次 push 时设置 upstream
+      if (
+        gitError.gitOutput?.includes('has no upstream branch') ||
+        gitError.gitOutput?.includes('set-upstream')
+      ) {
+        try {
+          const { stdout: branchOut } = await execWithShellPath('git branch --show-current', { cwd: worktreePath });
+          const branch = (branchOut || '').trim();
+          if (branch) {
+            const { stdout: pushStd, stderr: pushErr } = await execWithShellPath(`git push --set-upstream origin ${branch}`, { cwd: worktreePath });
+            const out = pushStd || pushErr || `Pushed and set upstream to origin/${branch}`;
+            return { output: out };
+          }
+        } catch {
+          // fallthrough to throw
+        }
+      }
       throw gitError;
     } finally {
       process.chdir(currentDir);

@@ -7,6 +7,7 @@ import { API } from '../../../utils/api';
 import type { CombinedDiffViewProps } from '../../../types/diff';
 import type { ExecutionDiff, GitDiffResult } from '../../../types/diff';
 import { Maximize2, Minimize2, RefreshCw } from 'lucide-react';
+import { parseFilesFromDiff, validateParsedFiles } from '../../../utils/diffParser';
 
 const HISTORY_LIMIT = 50;
 
@@ -180,15 +181,14 @@ const CombinedDiffView: React.FC<CombinedDiffViewProps> = memo(({
           
           let response;
           if (selectedExecutions.length === 1) {
-            // For single commit selection
+            // 单个选择：未提交使用 combinedDiff；已提交使用 getExecutionDiff 直接按提交展示
             if (selectedExecutions[0] === 0) {
-              // Special case for uncommitted changes - pass as single element array
               console.log('Requesting uncommitted changes for session:', sessionId, 'with executionIds:', [0]);
               response = await API.sessions.getCombinedDiff(sessionId, [0]);
             } else {
-              // For regular commits, pass it as a range with the same ID
-              console.log('Requesting single commit:', selectedExecutions[0]);
-              response = await API.sessions.getCombinedDiff(sessionId, [selectedExecutions[0], selectedExecutions[0]]);
+              console.log('Requesting single commit via getExecutionDiff:', selectedExecutions[0]);
+              const r = await API.sessions.getExecutionDiff(sessionId, String(selectedExecutions[0]));
+              response = r;
             }
           } else if (selectedExecutions.length === executions.length) {
             // Get all diffs
@@ -354,8 +354,14 @@ const CombinedDiffView: React.FC<CombinedDiffViewProps> = memo(({
 
   // Parse files from the diff
   const filesFromDiff = useMemo(() => {
-    if (!combinedDiff?.diff) return [];
-    
+    if (!combinedDiff) return [] as Array<{
+      path: string;
+      type: 'added' | 'deleted' | 'modified' | 'renamed';
+      additions: number;
+      deletions: number;
+      isBinary?: boolean;
+    }>;
+
     const files: Array<{
       path: string;
       type: 'added' | 'deleted' | 'modified' | 'renamed';
@@ -363,43 +369,54 @@ const CombinedDiffView: React.FC<CombinedDiffViewProps> = memo(({
       deletions: number;
       isBinary?: boolean;
     }> = [];
-    
-    const fileMatches = combinedDiff.diff.match(/diff --git[\s\S]*?(?=diff --git|$)/g);
-    
-    if (!fileMatches) return files;
-    
-    for (const fileContent of fileMatches) {
-      const fileNameMatch = fileContent.match(/diff --git a\/(.*?) b\/(.*?)(?:\n|$)/);
-      
-      if (!fileNameMatch) continue;
-      
-      const oldFileName = fileNameMatch[1] || '';
-      const newFileName = fileNameMatch[2] || '';
-      
-      const isBinary = fileContent.includes('Binary files') || fileContent.includes('GIT binary patch');
-      
-      let type: 'added' | 'deleted' | 'modified' | 'renamed' = 'modified';
-      if (fileContent.includes('new file mode')) {
-        type = 'added';
-      } else if (fileContent.includes('deleted file mode')) {
-        type = 'deleted';
-      } else if (fileContent.includes('rename from') && fileContent.includes('rename to')) {
-        type = 'renamed';
+
+    // 优先使用健壮的 diff 解析器（兼容 CRLF、带引号路径等场景）
+    if (combinedDiff.diff && combinedDiff.diff.trim().length > 0) {
+      try {
+        const parsed = validateParsedFiles(parseFilesFromDiff(combinedDiff.diff));
+        for (const f of parsed) {
+          files.push({
+            path: f.path,
+            type: f.type,
+            additions: f.additions,
+            deletions: f.deletions,
+            isBinary: f.isBinary,
+          });
+        }
+      } catch (e) {
+        console.warn('Robust diff parse failed, will fallback to simple parser:', e);
+        // Fallback: 保留简单解析逻辑（极端情况下）
+        const fileMatches = combinedDiff.diff.match(/diff --git[\s\S]*?(?=diff --git|$)/g);
+        if (fileMatches) {
+          for (const fileContent of fileMatches) {
+            const fileNameMatch = fileContent.match(/diff --git a\/(.*?) b\/(.*?)(?:\n|$)/);
+            if (!fileNameMatch) continue;
+            const oldFileName = fileNameMatch[1] || '';
+            const newFileName = fileNameMatch[2] || '';
+            const isBinary = fileContent.includes('Binary files') || fileContent.includes('GIT binary patch');
+            let type: 'added' | 'deleted' | 'modified' | 'renamed' = 'modified';
+            if (fileContent.includes('new file mode')) type = 'added';
+            else if (fileContent.includes('deleted file mode')) type = 'deleted';
+            else if (fileContent.includes('rename from') && fileContent.includes('rename to')) type = 'renamed';
+            const additions = (fileContent.match(/^\+[^+]/gm) || []).length;
+            const deletions = (fileContent.match(/^-[^-]/gm) || []).length;
+            files.push({ path: newFileName || oldFileName, type, additions, deletions, isBinary });
+          }
+        }
       }
-      
-      // Count additions and deletions
-      const additions = (fileContent.match(/^\+[^+]/gm) || []).length;
-      const deletions = (fileContent.match(/^-[^-]/gm) || []).length;
-      
-      files.push({
-        path: newFileName || oldFileName,
-        type,
-        additions,
-        deletions,
-        isBinary
-      });
     }
-    
+
+    // 如果解析不到，但后端提供了 changedFiles，则使用 changedFiles 作为后备展示
+    if (files.length === 0 && Array.isArray(combinedDiff.changedFiles) && combinedDiff.changedFiles.length > 0) {
+      return combinedDiff.changedFiles.map((p) => ({
+        path: p,
+        type: 'modified' as const,
+        additions: 0,
+        deletions: 0,
+        isBinary: false,
+      }));
+    }
+
     return files;
   }, [combinedDiff]);
 
