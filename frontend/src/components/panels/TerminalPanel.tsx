@@ -25,6 +25,8 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = React.memo(({ panel, 
   const [initError, setInitError] = useState<string | null>(null);
   const [notification, setNotification] = useState<{ message: string; type: 'copy' | 'paste' | 'commit' | 'error' } | null>(null);
   const [committing, setCommitting] = useState(false);
+  // tmux 面板不使用自定义快捷键（复制/粘贴等）
+  const isTmuxPanel = panel.type === 'tmux';
   
   // Get session data from context using the safe hook
   const sessionContext = useSession();
@@ -176,9 +178,11 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = React.memo(({ panel, 
               console.log('[TerminalPanel] FitAddon fitted with', dimensions.cols, 'x', dimensions.rows);
             }
           }
-          
-          // Attach context menu handler
-          terminalRef.current.addEventListener('contextmenu', handleContextMenu);
+
+          if (!isTmuxPanel) {
+            // Attach context menu handler
+            terminalRef.current.addEventListener('contextmenu', handleContextMenu);
+          }
           
           xtermRef.current = terminal;
           fitAddonRef.current = fitAddon;
@@ -251,7 +255,9 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = React.memo(({ panel, 
             inputDisposable.dispose();
             // 移除右键菜单事件监听
             if (terminalRef.current) {
-              terminalRef.current.removeEventListener('contextmenu', handleContextMenu);
+              if (!isTmuxPanel) {
+                terminalRef.current.removeEventListener('contextmenu', handleContextMenu);
+              }
             }
           };
         }
