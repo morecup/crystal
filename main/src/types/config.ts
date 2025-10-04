@@ -21,6 +21,8 @@ export interface AppConfig {
   stravuServerUrl?: string;
   // Theme preference
   theme?: 'light' | 'dark';
+  // Ignore Monaco init errors (suppress popup)
+  ignoreMonacoInitErrors?: boolean;
   // Notification settings
   notifications?: {
     enabled: boolean;
@@ -73,6 +75,7 @@ export interface UpdateConfigRequest {
   stravuApiKey?: string;
   stravuServerUrl?: string;
   theme?: 'light' | 'dark';
+  ignoreMonacoInitErrors?: boolean;
   notifications?: {
     enabled: boolean;
     playSound: boolean;

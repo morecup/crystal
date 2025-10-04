@@ -37,6 +37,7 @@ export function Settings({ isOpen, onClose }: SettingsProps) {
   const [claudeExecutablePath, setClaudeExecutablePath] = useState('');
   const [defaultPermissionMode, setDefaultPermissionMode] = useState<'approve' | 'ignore'>('ignore');
   const [autoCheckUpdates, setAutoCheckUpdates] = useState(true);
+  const [ignoreMonacoInitErrors, setIgnoreMonacoInitErrors] = useState(true);
   const [devMode, setDevMode] = useState(false);
   const [additionalPathsText, setAdditionalPathsText] = useState('');
   const [platform, setPlatform] = useState<string>('darwin');
@@ -75,6 +76,8 @@ export function Settings({ isOpen, onClose }: SettingsProps) {
       setClaudeExecutablePath(data.claudeExecutablePath || '');
       setDefaultPermissionMode(data.defaultPermissionMode || 'ignore');
       setAutoCheckUpdates(data.autoCheckUpdates !== false); // Default to true
+      // 默认勾选：当后端未返回该字段或为 true 时均视为勾选，仅当显式 false 才取消
+      setIgnoreMonacoInitErrors(data.ignoreMonacoInitErrors !== false);
       setDevMode(data.devMode || false);
       setEnableCrystalFooter(data.enableCrystalFooter !== false); // Default to true
       
@@ -112,6 +115,7 @@ export function Settings({ isOpen, onClose }: SettingsProps) {
         claudeExecutablePath,
         defaultPermissionMode,
         autoCheckUpdates,
+        ignoreMonacoInitErrors,
         devMode,
         enableCrystalFooter,
         additionalPaths: parsedPaths,
@@ -400,6 +404,18 @@ export function Settings({ isOpen, onClose }: SettingsProps) {
                   />
                   <p className="text-xs text-text-tertiary mt-1">
                     Adds a "Messages" tab to each session showing raw JSON responses from Claude Code. Useful for debugging and development.
+                  </p>
+                </div>
+
+                {/* 忽略 Monaco 初始化异常的全局开关 */}
+                <div className="mt-4">
+                  <Checkbox
+                    label="Ignore Monaco initialization errors (no popup)"
+                    checked={ignoreMonacoInitErrors}
+                    onChange={(e) => setIgnoreMonacoInitErrors(e.target.checked)}
+                  />
+                  <p className="text-xs text-text-tertiary mt-1">
+                    Suppresses Monaco editor initialization/runtime error popups. Errors will still be logged to console.
                   </p>
                 </div>
               </SettingsSection>

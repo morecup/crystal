@@ -1,6 +1,7 @@
 // 全局 Monaco 错误处理：将典型的 Monaco 初始化/释放异常改为弹窗提示
 // 使用全局错误存储弹出 ErrorDialog，而不是在页面内覆盖层显示
 import { useErrorStore } from '../stores/errorStore';
+import { useConfigStore } from '../stores/configStore';
 
 let lastShownAt = 0;
 const THROTTLE_MS = 2000;
@@ -36,6 +37,9 @@ export function registerMonacoGlobalErrorHandlers() {
       const message = e.message || '';
       if (!isMonacoRelated(message, e.filename)) return;
       if (!shouldShowNow()) return;
+      const { config } = useConfigStore.getState();
+      // 默认忽略：当配置未加载（undefined）或显式为 true 时均忽略，仅当显式为 false 才弹窗
+      if (config?.ignoreMonacoInitErrors !== false) return;
 
       // 通过全局错误存储弹出错误弹窗
       const { showError } = useErrorStore.getState();
@@ -57,6 +61,8 @@ export function registerMonacoGlobalErrorHandlers() {
       const reason = (e.reason && (e.reason.message || String(e.reason))) || '';
       if (!isMonacoRelated(reason)) return;
       if (!shouldShowNow()) return;
+      const { config } = useConfigStore.getState();
+      if (config?.ignoreMonacoInitErrors !== false) return;
 
       const { showError } = useErrorStore.getState();
       showError({
@@ -71,4 +77,3 @@ export function registerMonacoGlobalErrorHandlers() {
     }
   });
 }
-

@@ -32,6 +32,7 @@ export class ConfigManager extends EventEmitter {
         notifyOnWaiting: true,
         notifyOnComplete: true
       },
+      ignoreMonacoInitErrors: true,
       sessionCreationPreferences: {
         sessionCount: 1,
         toolType: 'none',

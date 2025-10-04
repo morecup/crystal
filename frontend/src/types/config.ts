@@ -10,6 +10,8 @@ export interface AppConfig {
   stravuApiKey?: string;
   stravuServerUrl?: string;
   theme?: 'light' | 'dark';
+  // 是否忽略 Monaco 初始化异常（启用后将不弹出错误对话框）
+  ignoreMonacoInitErrors?: boolean;
   notifications?: {
     enabled: boolean;
     playSound: boolean;

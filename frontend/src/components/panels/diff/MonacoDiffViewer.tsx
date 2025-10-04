@@ -7,6 +7,7 @@ import { MonacoErrorBoundary } from '../../MonacoErrorBoundary';
 import { MarkdownPreview } from '../../MarkdownPreview';
 import type * as monaco from 'monaco-editor';
 import { useErrorStore } from '../../../stores/errorStore';
+import { useConfigStore } from '../../../stores/configStore';
 
 interface IDisposable {
   dispose(): void;
@@ -109,6 +110,12 @@ export const MonacoDiffViewer: React.FC<MonacoDiffViewerProps> = ({
 
   useEffect(() => {
     if (!initError) return;
+    const { config } = useConfigStore.getState();
+    // 默认忽略：配置未加载或为 true 时不弹窗
+    if (config?.ignoreMonacoInitErrors !== false) {
+      setInitError(null);
+      return;
+    }
     const { showError } = useErrorStore.getState();
     const details = configuredVsPath
       ? `${initError}\n\nResource path: ${configuredVsPath}`
