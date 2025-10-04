@@ -39,15 +39,21 @@ export function buildGitCommitCommand(message: string, enableCrystalFooter: bool
 
 Co-Authored-By: Crystal <crystal@stravu.com>` : message;
   
-  // For Windows, use a different approach
+  // For Windows,构造多个 -m 段以保留段落换行
   if (process.platform === 'win32') {
-    // Write to a temporary file or use -F - with stdin
-    // For now, escape for direct use
-    const escaped = fullMessage
-      .replace(/\\/g, '\\\\')
-      .replace(/"/g, '\\"')
-      .replace(/\n/g, '\\n');
-    return `git commit -m "${escaped}"`;
+    const normalized = fullMessage.replace(/\r\n/g, '\n');
+    // 按空行拆分段落
+    const parts = normalized.split(/\n\s*\n/).map(s => s.trim()).filter(Boolean);
+    const escapedParts = parts.map(p => {
+      // 段内的单行换行在 Windows cmd 中不可靠，折叠为空格
+      const oneLine = p.replace(/\n+/g, ' ');
+      const escaped = oneLine
+        .replace(/\\/g, '\\\\')
+        .replace(/"/g, '\\"');
+      return `-m "${escaped}"`;
+    });
+    const flags = escapedParts.length > 0 ? ' ' + escapedParts.join(' ') : '';
+    return `git commit${flags}`;
   }
   
   // For Unix-like systems, use proper shell escaping
