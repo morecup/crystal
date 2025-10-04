@@ -1,4 +1,4 @@
-import { IpcMain } from 'electron';
+﻿import { IpcMain } from 'electron';
 import * as path from 'path';
 import * as fs from 'fs/promises';
 import { existsSync } from 'fs';
