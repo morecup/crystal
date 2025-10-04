@@ -5,7 +5,11 @@ export default defineConfig({
   plugins: [react()],
   server: {
     port: 4690,
-    strictPort: true
+    strictPort: true,
+    // 关闭 Vite 的错误遮罩层，避免把运行时错误附着在页面上
+    hmr: {
+      overlay: false,
+    },
   },
   base: './',
   build: {

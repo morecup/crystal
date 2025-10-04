@@ -6,6 +6,7 @@ import { debounce, type DebouncedFunction } from '../../../utils/debounce';
 import { MonacoErrorBoundary } from '../../MonacoErrorBoundary';
 import { MarkdownPreview } from '../../MarkdownPreview';
 import type * as monaco from 'monaco-editor';
+import { useErrorStore } from '../../../stores/errorStore';
 
 interface IDisposable {
   dispose(): void;
@@ -48,7 +49,7 @@ export const MonacoDiffViewer: React.FC<MonacoDiffViewerProps> = ({
   const previewRef = useRef<HTMLDivElement>(null);
   const [initError, setInitError] = useState<string | null>(null);
   const [configuredVsPath, setConfiguredVsPath] = useState<string | null>(null);
-  const [editorKey, setEditorKey] = useState<number>(0);
+  const [editorKey] = useState<number>(0);
   
   // Check if this is a markdown file
   const isMarkdownFile = useMemo(() => {
@@ -106,6 +107,21 @@ export const MonacoDiffViewer: React.FC<MonacoDiffViewerProps> = ({
     return () => { disposed = true; };
   }, []);
 
+  useEffect(() => {
+    if (!initError) return;
+    const { showError } = useErrorStore.getState();
+    const details = configuredVsPath
+      ? `${initError}\n\nResource path: ${configuredVsPath}`
+      : initError;
+    showError({
+      title: 'Editor Error',
+      error: 'Monaco initialization failed',
+      details,
+    });
+    // �����ش���״̬�������ظ���Ⱦҳ�渲�ǲ�
+    setInitError(null);
+  }, [initError, configuredVsPath]);
+
   // 捕获初始化异常并提示
   useEffect(() => {
     const onUnhandledRejection = (e: PromiseRejectionEvent) => {
@@ -137,13 +153,6 @@ export const MonacoDiffViewer: React.FC<MonacoDiffViewerProps> = ({
     return () => window.clearTimeout(t);
   }, [isMonacoConfigured, canMountEditor, isEditorReady]);
 
-  const handleRetryInit = () => {
-    setInitError(null);
-    setIsEditorReady(false);
-    setCanMountEditor(false);
-    setEditorKey(k => k + 1);
-    setTimeout(() => setCanMountEditor(true), 100);
-  };
 
   // Track when full content is loaded
   useEffect(() => {
@@ -820,21 +829,7 @@ export const MonacoDiffViewer: React.FC<MonacoDiffViewerProps> = ({
               />
             </MonacoErrorBoundary>
           )}
-          {initError && (
-            <div className="absolute inset-0 flex items-center justify-center bg-bg-primary/95 z-20 p-6">
-              <div className="max-w-xl text-center space-y-3">
-                <div className="text-lg font-semibold text-status-error">无法加载代码编辑器</div>
-                <div className="text-sm text-text-secondary">{initError}</div>
-                {configuredVsPath && (
-                  <div className="text-xs text-text-tertiary break-all">资源路径：{configuredVsPath}</div>
-                )}
-                <div className="text-xs text-text-tertiary">可尝试：检查网络/代理，禁用拦截插件，或重启应用。</div>
-                <div className="flex items-center justify-center gap-2 pt-2">
-                  <button onClick={handleRetryInit} className="px-3 py-1.5 rounded bg-interactive text-white text-sm">重试</button>
-                </div>
-              </div>
-            </div>
-          )}
+          {}
         </div>
       )}
     </div>
