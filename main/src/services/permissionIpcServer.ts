@@ -31,8 +31,16 @@ export class PermissionIpcServer {
       console.error('[Permission IPC] Failed to create socket directory, falling back to system temp:', error);
       socketDir = os.tmpdir();
     }
-    
-    this.socketPath = path.join(socketDir, `crystal-permissions-${process.pid}.sock`);
+    // 根据平台生成 IPC 监听路径：
+    // - Windows 使用命名管道：\\.\pipe\<name>
+    // - 非 Windows 使用 Unix Domain Socket 文件：<dir>/<name>.sock
+    if (process.platform === 'win32') {
+      // Windows 下 Node.js 只支持命名管道，不支持 .sock 文件路径
+      // 参考：https://nodejs.org/api/net.html#ipc-support
+      this.socketPath = `\\\\.\\pipe\\crystal-permissions-${process.pid}`;
+    } else {
+      this.socketPath = path.join(socketDir, `crystal-permissions-${process.pid}.sock`);
+    }
   }
 
   start(): Promise<void> {
