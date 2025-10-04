@@ -4,6 +4,7 @@ import { panelManager } from './panelManager';
 import { mainWindow } from '../index';
 import * as os from 'os';
 import * as path from 'path';
+import { existsSync } from 'fs';
 import { getShellPath } from '../utils/shellPath';
 import { buildSpawnEnv } from '../utils/envUtils';
 import { ShellDetector } from '../utils/shellDetector';
@@ -48,8 +49,21 @@ export class TerminalPanelManager {
       CRYSTAL_PANEL_ID: panel.id
     });
 
+    // Windows 平台：优先使用 ConPTY；若缺少二进制(conpty.node)或显式禁用，则回退 winpty
+    let hasConptyBinary = false;
+    if (process.platform === 'win32') {
+      try {
+        const nodePtyPkg = require.resolve('@homebridge/node-pty-prebuilt-multiarch/package.json');
+        const nodePtyRoot = path.dirname(nodePtyPkg);
+        const conptyPath = path.join(nodePtyRoot, 'build', 'Release', 'conpty.node');
+        hasConptyBinary = existsSync(conptyPath);
+      } catch {}
+    }
+    const preferConpty = process.platform === 'win32' && (process.env.CRYSTAL_USE_CONPTY !== '0') && hasConptyBinary;
+
     const ptyProcess = pty.spawn(shellInfo.path, shellInfo.args || [], {
       name: 'xterm-color',
+      useConpty: preferConpty,
       cols: 80,
       rows: 30,
       cwd: cwd,

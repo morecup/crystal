@@ -1,4 +1,4 @@
-import Bull from 'bull';
+﻿import Bull from 'bull';
 import { SimpleQueue } from './simpleTaskQueue';
 import type { SessionManager } from './sessionManager';
 import type { WorktreeManager } from './worktreeManager';
@@ -42,6 +42,10 @@ interface CreateSessionJob {
     sandboxMode?: 'read-only' | 'workspace-write' | 'danger-full-access';
     webSearch?: boolean;
     thinkingLevel?: 'low' | 'medium' | 'high';
+  };
+  claudeConfig?: {
+    model?: string;
+    permissionMode?: 'approve' | 'ignore';
   };
 }
 
@@ -206,7 +210,7 @@ export class TaskQueue {
                 .replace(/[^a-zA-Z0-9_.-]/g, '-'),
               selectedBranch,
               undefined,
-              targetProject.worktree_folder
+              targetProject.worktree_folder || undefined
             );
             worktreePath = result.worktreePath;
             baseCommit = result.baseCommit;
@@ -252,7 +256,7 @@ export class TaskQueue {
         }, null, 2));
 
         if (!isExistingBranch) {
-          const result = await worktreeManager.createWorktree(targetProject.path, worktreeName, undefined, baseBranch, targetProject.worktree_folder);
+          const result = await worktreeManager.createWorktree(targetProject.path, worktreeName, undefined, baseBranch, targetProject.worktree_folder || undefined);
           worktreePath = result.worktreePath;
           baseCommit = result.baseCommit;
           actualBaseBranch = result.baseBranch;
@@ -282,9 +286,12 @@ export class TaskQueue {
         );
         console.log(`[TaskQueue] Session created with ID: ${session.id}`);
         
-        // Attach codexConfig to the session object for the panel creation in events.ts
+        // Attach codexConfig/claudeConfig to the session object for the panel creation in events.ts
         if (codexConfig) {
           (session as any).codexConfig = codexConfig;
+        }
+        if (job.data && (job.data as any).claudeConfig) {
+          (session as any).claudeConfig = (job.data as any).claudeConfig;
         }
 
         // Only add prompt-related data if there's actually a prompt
@@ -567,6 +574,10 @@ export class TaskQueue {
       sandboxMode?: 'read-only' | 'workspace-write' | 'danger-full-access';
       webSearch?: boolean;
       thinkingLevel?: 'low' | 'medium' | 'high';
+    },
+    claudeConfig?: {
+      model?: string;
+      permissionMode?: 'approve' | 'ignore';
     }
   ): Promise<(Bull.Job<CreateSessionJob> | any)[]> {
     let folderId: string | undefined;
@@ -625,7 +636,7 @@ export class TaskQueue {
     for (let i = 0; i < count; i++) {
       // Use the generated base name if no template was provided
       const templateToUse = worktreeTemplate || generatedBaseName || '';
-      jobs.push(this.sessionQueue.add({ prompt, worktreeTemplate: templateToUse, index: i, permissionMode, projectId, folderId, baseBranch, branchSelection, branchName, autoCommit, toolType, commitMode, commitModeSettings, codexConfig }));
+      jobs.push(this.sessionQueue.add({ prompt, worktreeTemplate: templateToUse, index: i, permissionMode, projectId, folderId, baseBranch, branchSelection, branchName, autoCommit, toolType, commitMode, commitModeSettings, codexConfig, claudeConfig }));
     }
     return Promise.all(jobs);
   }

@@ -1,4 +1,4 @@
-import { useState, useEffect, memo, useCallback } from 'react';
+Ôªøimport { useState, useEffect, memo, useCallback } from 'react';
 import { useSessionStore } from '../stores/sessionStore';
 import { useNavigationStore } from '../stores/navigationStore';
 import { StatusIndicator } from './StatusIndicator';
@@ -486,9 +486,9 @@ export const SessionListItem = memo(function SessionListItem({ session, isNested
                   aria-label="Archive session"
                   icon={
                     isDeleting ? (
-                      <span className="text-text-tertiary">‚è?/span>
+                        <span className="text-text-tertiary">‚è≥</span>
                     ) : (
-                      <Archive className="w-4 h-4 text-status-warning hover:text-status-warning" />
+                        <Archive className="w-4 h-4 text-status-warning hover:text-status-warning" />
                     )
                   }
                 />
@@ -567,7 +567,7 @@ export const SessionListItem = memo(function SessionListItem({ session, isNested
         onClose={() => setShowArchiveConfirm(false)}
         onConfirm={handleConfirmArchive}
         title={`Archive Session`}
-        message={`Archive session "${session.name}"? This will:\n\n‚Ä?Move the session to the archived sessions list\n‚Ä?Preserve all session history and outputs\n${session.isMainRepo ? '‚Ä?Close the active Claude Code connection' : `‚Ä?Remove the git worktree locally (${session.worktreePath?.split('/').pop() || 'worktree'})`}`}
+        message={`Archive session "${session.name}"? This will:\n\n‚Ä¢ Move the session to the archived sessions list\n‚Ä¢ Preserve all session history and outputs\n${session.isMainRepo ? '‚Ä¢ Close the active Claude Code connection' : `‚Ä¢ Remove the git worktree locally (${session.worktreePath?.split('/').pop() || 'worktree'})`}`}
         confirmText="Archive"
         confirmButtonClass="bg-amber-600 hover:bg-amber-700 text-white"
         icon={<Archive className="w-6 h-6 text-amber-500 flex-shrink-0" />}
@@ -621,3 +621,4 @@ export const SessionListItem = memo(function SessionListItem({ session, isNested
     </>
   );
 });
+

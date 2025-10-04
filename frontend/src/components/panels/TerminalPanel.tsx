@@ -1,4 +1,4 @@
-import React, { useRef, useEffect, useState } from 'react';
+﻿import React, { useRef, useEffect, useState } from 'react';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { useSession } from '../../contexts/SessionContext';
@@ -124,23 +124,16 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = React.memo(({ panel, 
           return false;
         });
 
-        // 添加智能右键菜单功能（有选中时复制，无选中时粘贴）
+        // 右键菜单：有选中则复制，无选中则粘贴
         const handleContextMenu = (e: MouseEvent) => {
           e.preventDefault();
           e.stopPropagation();
-          
-          // 检查是否有选中的文�?
           const selection = terminal?.getSelection();
-          
           if (selection && selection.length > 0) {
-            // 有选中文本时，复制到剪贴板
             navigator.clipboard.writeText(selection)
               .then(() => {
-                console.log('[TerminalPanel] Text copied to clipboard:', selection.substring(0, 50) + '...');
-                // 显示复制成功提示
-                setNotification({ message: '已复制到剪贴�?, type: 'copy' });
+                setNotification({ message: "已复制到剪切板", type: 'copy' });
                 setTimeout(() => setNotification(null), 2000);
-                // 清除选中状�?
                 terminal?.clearSelection();
               })
               .catch(err => {
@@ -149,14 +142,11 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = React.memo(({ panel, 
                 setTimeout(() => setNotification(null), 2000);
               });
           } else {
-            // 无选中文本时，从剪贴板粘贴
             navigator.clipboard.readText()
               .then(text => {
                 if (text && terminal && !disposed) {
                   terminal.paste(text);
-                  console.log('[TerminalPanel] Text pasted from clipboard:', text.substring(0, 50) + '...');
-                  // 显示粘贴成功提示
-                  setNotification({ message: '已粘�?, type: 'paste' });
+                  setNotification({ message: "Pasted", type: 'paste' });
                   setTimeout(() => setNotification(null), 2000);
                 }
               })
@@ -187,7 +177,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = React.memo(({ panel, 
             }
           }
           
-          // 添加右键菜单事件监听�?
+          // Attach context menu handler
           terminalRef.current.addEventListener('contextmenu', handleContextMenu);
           
           xtermRef.current = terminal;
@@ -216,14 +206,14 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = React.memo(({ panel, 
           console.log('[TerminalPanel] Terminal initialization complete, isInitialized set to true');
           // Set up IPC communication for terminal I/O
           const outputHandler = (data: { panelId?: string; sessionId?: string; output?: string } | unknown) => {
-            // ��������弶�ն�������� panelId��
+            // 仅处理面板级终端输出（带 panelId）
             if (data && typeof data === 'object' && 'panelId' in data && (data as any).panelId && 'output' in data) {
               const typedData = data as { panelId: string; output: string };
               if (typedData.panelId === panel.id && terminal && !disposed) {
                 terminal.write(typedData.output);
               }
             }
-            // ���ԻỰ���ն����
+            // 忽略会话级终端输出
           };
 
           // Set up IPC communication for terminal I/O
@@ -259,7 +249,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = React.memo(({ panel, 
             resizeObserver.disconnect();
             unsubscribeOutput();
             inputDisposable.dispose();
-            // 移除右键菜单事件监听�?
+            // 移除右键菜单事件监听
             if (terminalRef.current) {
               terminalRef.current.removeEventListener('contextmenu', handleContextMenu);
             }
@@ -367,7 +357,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = React.memo(({ panel, 
             }
           }}
         >
-          {committing ? '提交中�? : 'Smart Commit'}
+          {committing ? '提交中…' : 'Smart Commit'}
         </button>
       </div>
 

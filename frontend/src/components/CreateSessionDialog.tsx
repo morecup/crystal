@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+﻿import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { API } from '../utils/api';
 import type { CreateSessionRequest } from '../types/session';
 import type { Project } from '../types/project';
@@ -670,8 +670,8 @@ export function CreateSessionDialog({ isOpen, onClose, projectName, projectId, i
         prompt: finalPrompt || '(no prompt)'
       });
       const response = await API.sessions.create({
-        prompt: finalPrompt || undefined,
-        worktreeTemplate: branchSelection === 'existing' ? (existingBranchName || undefined) : (sessionName || undefined), // existing ��֧�÷�֧��
+        prompt: finalPrompt || '',
+        worktreeTemplate: branchSelection === 'existing' ? (existingBranchName || undefined) : (sessionName || undefined), // existing 分支用分支名
         count: sessionCount,
         // Model is now managed at panel level, not session level
         toolType,
@@ -1203,7 +1203,7 @@ export function CreateSessionDialog({ isOpen, onClose, projectName, projectId, i
                       className="w-full px-3 py-2 border border-border-primary rounded-md focus:outline-none focus:ring-2 focus:ring-interactive text-text-primary bg-surface-secondary"
                       disabled={isLoadingBranches}
                     >
-                      <option value="" disabled>选择已有的本地分�?/option>
+                      <option value="" disabled>选择已有的本地分支</option>
                       {branches.map(b => (
                         <option key={b.name} value={b.name}>
                           {b.name}{b.hasWorktree ? ' (has worktree)' : ''}{b.isCurrent ? ' (current)' : ''}
@@ -1211,7 +1211,7 @@ export function CreateSessionDialog({ isOpen, onClose, projectName, projectId, i
                       ))}
                     </select>
                     <p className="text-xs text-text-tertiary mt-1">
-                      选择已有分支时，会话名会自动使用该分支名且不可编辑；若该分支已有 worktree 将直接复用�?
+                      选择已有分支时，会话名会自动使用该分支名且不可编辑；若该分支已有 worktree 将直接复用�?
                     </p>
                   </div>
                 )}
