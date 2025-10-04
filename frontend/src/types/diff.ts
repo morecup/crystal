@@ -61,6 +61,7 @@ export interface ExecutionListProps {
   onCommit?: () => void;
   onRevert?: (commitHash: string) => void;
   onRestore?: () => void;
+  onDropLastCommit?: () => void; // 删除最近一次提交（保留变更）
   historyLimitReached?: boolean;
   historyLimit?: number;
 }

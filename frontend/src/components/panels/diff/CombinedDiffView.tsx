@@ -7,6 +7,7 @@ import { API } from '../../../utils/api';
 import type { CombinedDiffViewProps } from '../../../types/diff';
 import type { ExecutionDiff, GitDiffResult } from '../../../types/diff';
 import { Maximize2, Minimize2, RefreshCw } from 'lucide-react';
+import DeleteLastCommitDialog from '../../DeleteLastCommitDialog';
 import { parseFilesFromDiff, validateParsedFiles } from '../../../utils/diffParser';
 
 const HISTORY_LIMIT = 50;
@@ -342,6 +343,31 @@ const CombinedDiffView: React.FC<CombinedDiffViewProps> = memo(({
     }
   }, [sessionId]);
 
+  const [showDeleteDialog, setShowDeleteDialog] = useState(false);
+  const [latestCommitInfo, setLatestCommitInfo] = useState<{ hash?: string; message?: string }>({});
+
+  const handleDropLastCommit = useCallback(() => {
+    const latest = executions.find(e => e.id !== 0);
+    setLatestCommitInfo({ hash: latest?.after_commit_hash, message: latest?.commit_message });
+    setShowDeleteDialog(true);
+  }, [executions]);
+
+  const confirmDropLastCommit = useCallback(async (mode: 'soft' | 'hard') => {
+    const result = await window.electronAPI.invoke('sessions:drop-last-commit', { sessionId, mode });
+    if (!result?.success) throw new Error(result?.error || 'Failed to delete last commit');
+    const res = await API.sessions.getExecutions(sessionId);
+    if (res.success) {
+      setExecutions(res.data);
+      setSelectedExecutions([]);
+    }
+    if (selectedExecutions.includes(0)) {
+      const diffResponse = await API.sessions.getCombinedDiff(sessionId, [0]);
+      if (diffResponse.success) setCombinedDiff(diffResponse.data);
+    } else {
+      setCombinedDiff(null);
+    }
+  }, [sessionId, selectedExecutions]);
+
   // Clear selected file when diff changes
   useEffect(() => {
     setSelectedFile(undefined);
@@ -601,6 +627,7 @@ const CombinedDiffView: React.FC<CombinedDiffViewProps> = memo(({
                 onCommit={() => setShowCommitDialog(true)}
                 onRevert={handleRevert}
                 onRestore={handleRestore}
+                onDropLastCommit={handleDropLastCommit}
                 historyLimitReached={limitReached}
                 historyLimit={HISTORY_LIMIT}
               />
@@ -684,7 +711,15 @@ const CombinedDiffView: React.FC<CombinedDiffViewProps> = memo(({
           )}
         </div>
       </div>
-      
+
+      <DeleteLastCommitDialog
+        isOpen={showDeleteDialog}
+        onClose={() => setShowDeleteDialog(false)}
+        onConfirm={confirmDropLastCommit}
+        commitHash={latestCommitInfo.hash}
+        commitMessage={latestCommitInfo.message}
+      />
+
       {/* Commit Dialog */}
       <CommitDialog
         isOpen={showCommitDialog}

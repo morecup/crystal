@@ -1,5 +1,5 @@
 import React, { useState, memo } from 'react';
-import { GitCommit, RotateCcw, RefreshCw } from 'lucide-react';
+import { GitCommit, RotateCcw, RefreshCw, Trash2 } from 'lucide-react';
 import type { ExecutionListProps } from '../types/diff';
 import { Button } from './ui/Button';
 import { Card } from './ui/Card';
@@ -11,6 +11,7 @@ const ExecutionList: React.FC<ExecutionListProps> = memo(({
   onCommit,
   onRevert,
   onRestore,
+  onDropLastCommit,
   historyLimitReached = false,
   historyLimit
 }) => {
@@ -109,6 +110,8 @@ const ExecutionList: React.FC<ExecutionListProps> = memo(({
         {executions.map((execution) => {
           const isSelected = isInRange(execution.id);
           const isUncommitted = execution.id === 0;
+          const latestNonUncommittedId = executions.find(e => e.id !== 0)?.id;
+          const isLatestCommitted = !isUncommitted && execution.id === latestNonUncommittedId;
           
           return (
             <div
@@ -169,6 +172,7 @@ const ExecutionList: React.FC<ExecutionListProps> = memo(({
                         )}
                       </div>
                     )}
+                    {/* 删除按钮移动到右侧操作区，避免标题区域拥挤 */}
                   </div>
                   <div className="text-xs text-text-tertiary">
                     {formatTimestamp(execution.timestamp)}
@@ -199,6 +203,21 @@ const ExecutionList: React.FC<ExecutionListProps> = memo(({
                           >
                             <RotateCcw className="w-3 h-3" />
                             Revert
+                          </Button>
+                        )}
+                        {onDropLastCommit && isLatestCommitted && (
+                          <Button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onDropLastCommit();
+                            }}
+                            size="sm"
+                            variant="danger"
+                            className="text-xs"
+                            title="Delete the most recent commit"
+                          >
+                            <Trash2 className="w-3 h-3" />
+                            Delete
                           </Button>
                         )}
                       </>

@@ -1302,6 +1302,43 @@ export function registerGitHandlers(ipcMain: IpcMain, services: AppServices): vo
     }
   });
 
+  // Delete the most recent commit (soft/hard reset)
+  const dropLastCommitHandler = async (_event: any, request: { sessionId: string; mode?: 'soft' | 'hard' }) => {
+    try {
+      const session = await sessionManager.getSession(request.sessionId);
+      if (!session || !session.worktreePath) {
+        return { success: false, error: 'Session or worktree path not found' };
+      }
+
+      const mode = request.mode === 'hard' ? 'hard' : 'soft';
+
+      // Ensure there is at least one parent commit
+      try {
+        execSync('git rev-parse HEAD^', { cwd: session.worktreePath, encoding: 'utf8' });
+      } catch {
+        return { success: false, error: 'No parent commit to reset to' };
+      }
+
+      // Perform reset
+      const cmd = mode === 'hard' ? 'git reset --hard HEAD~1' : 'git reset --soft HEAD~1';
+      execSync(cmd, { cwd: session.worktreePath });
+
+      // Refresh git status and executions
+      await refreshGitStatusForSession(request.sessionId, true);
+
+      return { success: true };
+    } catch (error: any) {
+      console.error('Failed to drop last commit:', error);
+      return { success: false, error: error?.message || 'Failed to drop last commit' };
+    }
+  };
+
+  // 注册多个别名，避免命名空间不一致导致前端调用失败
+  ipcMain.handle('git:drop-last-commit', dropLastCommitHandler);
+  ipcMain.handle('sessions:drop-last-commit', dropLastCommitHandler);
+  // 兼容历史/误拼写（无冒号）的调用
+  ipcMain.handle('gitdrop-last-commit', dropLastCommitHandler);
+
   ipcMain.handle('sessions:get-last-commits', async (_event, sessionId: string, count: number = 50) => {
     try {
       const session = await sessionManager.getSession(sessionId);
