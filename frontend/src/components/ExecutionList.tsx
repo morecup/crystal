@@ -1,8 +1,45 @@
-import React, { useState, memo } from 'react';
+﻿import { createPortal } from 'react-dom';
+import React, { useState, memo, useRef, useEffect } from 'react';
 import { GitCommit, RotateCcw, RefreshCw, Trash2 } from 'lucide-react';
-import type { ExecutionListProps } from '../types/diff';
+import type { ExecutionListProps, ExecutionDiff } from '../types/diff';
 import { Button } from './ui/Button';
 import { Card } from './ui/Card';
+// 中文相对时间格式化
+function formatRelativeTimeZH(dateStr: string): string {
+  try {
+    const ts = new Date(dateStr).getTime();
+    const now = Date.now();
+    const diff = Math.max(0, Math.floor((now - ts) / 1000));
+    if (diff < 60) return `${diff} 秒前`;
+    const mins = Math.floor(diff / 60);
+    if (mins < 60) return `${mins} 分钟前`;
+    const hours = Math.floor(mins / 60);
+    if (hours < 24) return `${hours} 小时前`;
+    const days = Math.floor(hours / 24);
+    if (days < 30) return `${days} 天前`;
+    const months = Math.floor(days / 30);
+    if (months < 12) return `${months} 个月前`;
+    const years = Math.floor(months / 12);
+    return `${years} 年前`;
+  } catch {
+    return '';
+  }
+}
+
+// 中文绝对时间：YYYY年M月D日 HH:mm
+function formatAbsoluteTimeZH(dateStr: string): string {
+  try {
+    const d = new Date(dateStr);
+    const y = d.getFullYear();
+    const m = d.getMonth() + 1;
+    const day = d.getDate();
+    const hh = String(d.getHours()).padStart(2, '0');
+    const mm = String(d.getMinutes()).padStart(2, '0');
+    return `${y}年${m}月${day}日 ${hh}:${mm}`;
+  } catch {
+    return dateStr;
+  }
+}
 
 const ExecutionList: React.FC<ExecutionListProps> = memo(({
   executions,
@@ -16,6 +53,40 @@ const ExecutionList: React.FC<ExecutionListProps> = memo(({
   historyLimit
 }) => {
   const [rangeStart, setRangeStart] = useState<number | null>(null);
+  const [hoverData, setHoverData] = useState<ExecutionDiff | null>(null);
+  const [anchor, setAnchor] = useState<{ top: number; height: number; right: number } | null>(null);
+  const [containerRight, setContainerRight] = useState<number>(0);
+  const listRef = useRef<HTMLDivElement>(null);
+  const hideTimerRef = useRef<number | null>(null);
+  // 监听窗口与列表滚动，更新容器右边界，确保悬浮卡片固定在“列表的右边”且不被遮挡
+  useEffect(() => {
+    const update = () => {
+      const rect = listRef.current?.getBoundingClientRect();
+      setContainerRight(rect ? rect.right : window.innerWidth);
+    };
+    update();
+    window.addEventListener('resize', update);
+    const el = listRef.current;
+    el?.addEventListener('scroll', update, { passive: true } as AddEventListenerOptions);
+    return () => {
+      window.removeEventListener('resize', update);
+      el?.removeEventListener('scroll', update);
+    };
+  }, []);
+  // 悬浮卡片关闭的节流与防抖
+  const cancelClose = () => {
+    if (hideTimerRef.current) {
+      window.clearTimeout(hideTimerRef.current);
+      hideTimerRef.current = null;
+    }
+  };
+  const scheduleClose = () => {
+    cancelClose();
+    hideTimerRef.current = window.setTimeout(() => {
+      setHoverData(null);
+      setAnchor(null);
+      }, 180);
+  };
   const limitDisplay = historyLimit ?? 50;
 
   const handleCommitClick = (executionId: number, event: React.MouseEvent) => {
@@ -106,7 +177,7 @@ const ExecutionList: React.FC<ExecutionListProps> = memo(({
       </div>
 
       {/* Execution list */}
-      <div className="flex-1 overflow-y-auto min-h-0">
+      <div ref={listRef} className="flex-1 overflow-y-auto min-h-0">
         {executions.map((execution) => {
           const isSelected = isInRange(execution.id);
           const isUncommitted = execution.id === 0;
@@ -117,7 +188,7 @@ const ExecutionList: React.FC<ExecutionListProps> = memo(({
             <div
               key={execution.id}
               className={`
-                flex items-center p-4 border-b border-border-secondary cursor-pointer hover:bg-bg-hover transition-colors
+                relative flex items-center p-4 border-b border-border-secondary cursor-pointer hover:bg-bg-hover transition-colors
                 ${isSelected ? 'bg-bg-accent border-l-4 border-l-interactive' : ''}
                 ${isUncommitted ? 'bg-status-warning/20' : ''}
               `}
@@ -136,7 +207,20 @@ const ExecutionList: React.FC<ExecutionListProps> = memo(({
                       {isUncommitted ? (
                         <span className="text-status-warning">Uncommitted changes</span>
                       ) : (
-                        <span>{truncateMessage(execution.commit_message || execution.prompt_text || `Commit ${execution.execution_sequence}`)}</span>
+                        <span
+                          onMouseEnter={(e) => {
+                            cancelClose();
+                            setHoverData(execution);
+                            const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                            setAnchor({ top: r.top, height: r.height, right: r.right });
+                            const rect = listRef.current?.getBoundingClientRect();
+                            setContainerRight(rect ? rect.right : window.innerWidth);
+                          }}
+                          onMouseLeave={scheduleClose}
+                          className="hover:underline"
+                        >
+                          {truncateMessage(execution.commit_message || execution.prompt_text || `Commit ${execution.execution_sequence}`)}
+                        </span>
                       )}
                     </div>
                     {isUncommitted && (
@@ -237,6 +321,35 @@ const ExecutionList: React.FC<ExecutionListProps> = memo(({
         )}
       </div>
 
+      {hoverData && anchor && (
+        createPortal(
+          <div
+            style={{ position: "fixed", top: anchor.top + anchor.height / 2, left: containerRight, transform: "translateY(-50%)", zIndex: 2147483647 }}
+            onMouseEnter={cancelClose} onMouseLeave={scheduleClose}
+          >
+            <div className="bg-bg-tertiary border border-border-primary rounded-lg shadow-2xl px-4 py-3 max-w-[560px]">
+              <div className="text-sm text-text-primary">
+                <span className="font-medium">{(hoverData as any).author || "未知作者"}</span>
+                <span className="mx-1">,</span>
+                <span>
+                  {formatRelativeTimeZH(hoverData.timestamp)}
+                  {` (${formatAbsoluteTimeZH(hoverData.timestamp)})`}
+                </span>
+              </div>
+              <div className="mt-2 text-sm text-text-secondary whitespace-pre-wrap break-words">
+                {hoverData.commit_message || hoverData.prompt_text || `Commit ${hoverData.execution_sequence}`}
+              </div>
+              <div className="mt-2 text-xs">
+                <span className="text-text-tertiary">已更改 {hoverData.stats_files_changed} 个文件, </span>
+                <span className="text-status-success">{hoverData.stats_additions} 个插入(+)</span>
+                <span className="mx-1 text-text-tertiary">,</span>
+                <span className="text-status-error">{hoverData.stats_deletions} 个删除(-)</span>
+              </div>
+            </div>
+          </div>,
+          document.body
+        )
+      )}
       {/* Selection summary */}
       {selectedExecutions.length > 0 && (
         <div className="p-4 bg-bg-accent border-t border-interactive">

@@ -6,6 +6,8 @@ export interface TooltipProps {
   children: React.ReactNode;
   side?: 'top' | 'bottom' | 'left' | 'right';
   className?: string;
+  /** 是否允许多行显示（支持换行符） */
+  multiline?: boolean;
 }
 
 export const Tooltip: React.FC<TooltipProps> = ({
@@ -13,6 +15,7 @@ export const Tooltip: React.FC<TooltipProps> = ({
   children,
   side = 'top',
   className,
+  multiline = false,
 }) => {
   const [isVisible, setIsVisible] = useState(false);
 
@@ -41,7 +44,8 @@ export const Tooltip: React.FC<TooltipProps> = ({
       {isVisible && (
         <div
           className={cn(
-            'absolute z-50 px-3 py-2 text-sm text-text-primary bg-bg-tertiary border border-border-primary rounded-lg shadow-lg whitespace-nowrap animate-in fade-in duration-200',
+            'absolute z-50 px-3 py-2 text-sm text-text-primary bg-bg-tertiary border border-border-primary rounded-lg shadow-lg animate-in fade-in duration-200',
+            multiline ? 'whitespace-pre-line break-words max-w-[34rem]' : 'whitespace-nowrap',
             positionClasses[side]
           )}
           role="tooltip"
