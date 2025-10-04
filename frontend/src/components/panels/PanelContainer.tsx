@@ -53,6 +53,7 @@ export const PanelContainer: React.FC<PanelContainerProps> = React.memo(({
     switch (panel.type) {
       case 'terminal':
       case 'wsl':
+      case 'tmux':
         return <TerminalPanel panel={panel} isActive={isActive} />;
       case 'diff':
         return <DiffPanel panel={panel} isActive={isActive} sessionId={panel.sessionId} isMainRepo={isMainRepo} />;

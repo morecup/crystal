@@ -7,7 +7,7 @@ export interface ToolPanel {
   metadata: ToolPanelMetadata;   // Creation time, position, etc.
 }
 
-export type ToolPanelType = 'terminal' | 'wsl' | 'claude' | 'codex' | 'diff' | 'editor' | 'logs' | 'dashboard' | 'setup-tasks'; // Will expand later
+export type ToolPanelType = 'terminal' | 'wsl' | 'tmux' | 'claude' | 'codex' | 'diff' | 'editor' | 'logs' | 'dashboard' | 'setup-tasks'; // Will expand later
 
 export interface ToolPanelState {
   isActive: boolean;
@@ -232,6 +232,14 @@ export const PANEL_CAPABILITIES: Record<ToolPanelType, PanelCapabilities> = {
   wsl: {
     canEmit: ['terminal:command_executed', 'terminal:exit', 'files:changed'],
     canConsume: [], // WSL terminal doesn't consume events in Phase 1-2
+    requiresProcess: true,
+    singleton: false,
+    canAppearInProjects: true,
+    canAppearInWorktrees: true
+  },
+  tmux: {
+    canEmit: ['terminal:command_executed', 'terminal:exit', 'files:changed'],
+    canConsume: [], // TMUX terminal同样不消费事件（初期）
     requiresProcess: true,
     singleton: false,
     canAppearInProjects: true,

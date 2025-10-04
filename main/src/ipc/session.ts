@@ -6,6 +6,7 @@ import type { AppServices } from './types';
 import type { CreateSessionRequest } from '../types/session';
 import { getCrystalSubdirectory } from '../utils/crystalDirectory';
 import { execSync } from '../utils/commandExecutor';
+import { getCurrentBranch } from '../services/gitPlumbingCommands';
 import { convertDbFolderToFolder } from './folders';
 import { panelManager } from '../services/panelManager';
 import { cleanupSessionLogs } from './logs';
@@ -236,6 +237,23 @@ export function registerSessionHandlers(ipcMain: IpcMain, services: AppServices)
       let archiveMessage = `\r\n\x1b[36m[${timestamp}]\x1b[0m \x1b[1m\x1b[44m\x1b[37m 📦 ARCHIVING SESSION \x1b[0m\r\n`;
       archiveMessage += `\x1b[90mSession will be archived and removed from the active sessions list.\x1b[0m\r\n`;
 
+      // 精准删除当前 Session 相关的 tmux 会话（按 项目_分支_ 前缀）
+      try {
+        if (process.platform === 'win32') {
+          const project = dbSession.project_id ? databaseService.getProject(dbSession.project_id) : undefined;
+          const projectNameRaw = project?.name || (project?.path ? require('path').basename(project.path) : 'project');
+          const branchRaw = dbSession.worktree_name || getCurrentBranch(project?.path || dbSession.worktree_path || process.cwd()) || 'detached';
+          const sanitize = (s: string) => String(s).replace(/[^\w.-]+/g, '-').replace(/^-+/, '').replace(/-+$/, '');
+          const prefix = `${sanitize(projectNameRaw)}_${sanitize(branchRaw)}_`;
+          const regexPrefix = prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+          const killCmd = `tmux list-sessions -F '#S' 2>/dev/null | grep -E '^${regexPrefix}' | while read -r s; do tmux kill-session -t "$s" 2>/dev/null || true; done`;
+          const full = `wsl.exe -e bash -lc ${JSON.stringify(killCmd)}`;
+          try { execSync(full, { encoding: 'utf-8' } as any); } catch {}
+        }
+      } catch (e) {
+        console.warn('[IPC:sessions:delete] Failed to kill tmux sessions for this session:', e);
+      }
+
       // Archive the session immediately to provide fast feedback to the user
       await sessionManager.archiveSession(sessionId);
 
@@ -366,6 +384,23 @@ export function registerSessionHandlers(ipcMain: IpcMain, services: AppServices)
       }
       if (!dbSession.archived) {
         return { success: false, error: 'Session must be archived before permanent deletion' };
+      }
+
+      // 再次精准清理与该 Session 相关的 tmux 会话（冪等安全）
+      try {
+        if (process.platform === 'win32') {
+          const project = dbSession.project_id ? databaseService.getProject(dbSession.project_id) : undefined;
+          const projectNameRaw = project?.name || (project?.path ? require('path').basename(project.path) : 'project');
+          const branchRaw = dbSession.worktree_name || getCurrentBranch(project?.path || dbSession.worktree_path || process.cwd()) || 'detached';
+          const sanitize = (s: string) => String(s).replace(/[^\w.-]+/g, '-').replace(/^-+/, '').replace(/-+$/, '');
+          const prefix = `${sanitize(projectNameRaw)}_${sanitize(branchRaw)}_`;
+          const regexPrefix = prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+          const killCmd = `tmux list-sessions -F '#S' 2>/dev/null | grep -E '^${regexPrefix}' | while read -r s; do tmux kill-session -t "$s" 2>/dev/null || true; done`;
+          const full = `wsl.exe -e bash -lc ${JSON.stringify(killCmd)}`;
+          try { execSync(full, { encoding: 'utf-8' } as any); } catch {}
+        }
+      } catch (e) {
+        console.warn('[IPC:sessions:delete-permanent] Failed to kill tmux sessions:', e);
       }
 
       try {

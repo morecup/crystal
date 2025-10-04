@@ -141,6 +141,7 @@ export const PanelTabBar: React.FC<PanelTabBarProps> = memo(({
     switch (type) {
       case 'terminal':
       case 'wsl':
+      case 'tmux':
         return <Terminal className="w-4 h-4" />;
       case 'claude':
         return <MessageSquare className="w-4 h-4" />;

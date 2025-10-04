@@ -1,8 +1,11 @@
-import { IpcMain } from 'electron';
+﻿import { IpcMain } from 'electron';
 import { panelManager } from '../services/panelManager';
 import { terminalPanelManager } from '../services/terminalPanelManager';
 import { databaseService } from '../services/database';
 import { CreatePanelRequest, PanelEventType, ToolPanel } from '../../../shared/types/panels';
+import { databaseService as dbService } from '../services/database';
+import * as path from 'path';
+import { getCurrentBranch } from '../services/gitPlumbingCommands';
 import type { AppServices } from './types';
 
 export function registerPanelHandlers(ipcMain: IpcMain, services: AppServices) {
@@ -80,7 +83,7 @@ export function registerPanelHandlers(ipcMain: IpcMain, services: AppServices) {
           console.warn('[Panels IPC] Failed to unregister Codex panel during delete:', err);
         }
       }
-      if (panel?.type === 'terminal') {
+      if (panel?.type === 'terminal' || panel?.type === 'wsl' || panel?.type === 'tmux') {
         terminalPanelManager.destroyTerminal(panelId);
       }
       
@@ -94,7 +97,18 @@ export function registerPanelHandlers(ipcMain: IpcMain, services: AppServices) {
   
   ipcMain.handle('panels:update', async (_, panelId: string, updates: Partial<ToolPanel>) => {
     try {
+      const panelBefore = panelManager.getPanel(panelId);
       const result = await panelManager.updatePanel(panelId, updates);
+
+      // 若是 tmux 面板且标题发生变化，则后台执行 tmux rename-session（不写入终端）
+      if (panelBefore && panelBefore.type === 'tmux' && typeof updates.title === 'string' && updates.title.trim()) {
+        try {
+          await (terminalPanelManager as any).renameTmuxSession(panelId, updates.title.trim(), panelBefore.title);
+        } catch (e) {
+          console.warn('[Panels IPC] Failed to propagate tmux rename from panel title change:', e);
+        }
+      }
+
       return { success: true, data: result };
     } catch (error) {
       console.error('[IPC] Failed to update panel:', error);
@@ -141,7 +155,7 @@ export function registerPanelHandlers(ipcMain: IpcMain, services: AppServices) {
     }
     
     // Initialize based on panel type
-    if (panel.type === 'terminal' || panel.type === 'wsl') {
+    if (panel.type === 'terminal' || panel.type === 'wsl' || panel.type === 'tmux') {
       const cwd = options?.cwd || process.cwd();
       await terminalPanelManager.initializeTerminal(panel, cwd);
     }
@@ -153,7 +167,7 @@ export function registerPanelHandlers(ipcMain: IpcMain, services: AppServices) {
     const panel = panelManager.getPanel(panelId);
     if (!panel) return false;
     
-    if (panel.type === 'terminal' || panel.type === 'wsl') {
+    if (panel.type === 'terminal' || panel.type === 'wsl' || panel.type === 'tmux') {
       return terminalPanelManager.isTerminalInitialized(panelId);
     }
     
