@@ -1,6 +1,7 @@
 import { IpcMain } from 'electron';
 import * as fs from 'fs/promises';
 import * as path from 'path';
+import { buildGitCommitCommand } from '../utils/shellEscape';
 import { glob } from 'glob';
 import type { AppServices } from './types';
 import type { Session } from '../types/session';
@@ -245,11 +246,8 @@ export function registerFileHandlers(ipcMain: IpcMain, services: AppServices): v
 
 Co-Authored-By: Crystal <crystal@stravu.com>` : request.message;
 
-        // Use a here document to handle multi-line commit messages
-        const command = `git commit -m "$(cat <<'EOF'
-${commitMessage}
-EOF
-)"`;
+        // 使用跨平台的安全提交命令，支持多行消息
+        const command = buildGitCommitCommand(commitMessage);
 
         await execAsync(command, { cwd: session.worktreePath });
 
@@ -279,10 +277,7 @@ EOF
 
 Co-Authored-By: Crystal <crystal@stravu.com>` : request.message;
             
-            const command = `git commit -m "$(cat <<'EOF'
-${retryMessage}
-EOF
-)"`;
+            const command = buildGitCommitCommand(retryMessage);
             await execAsync(command, { cwd: session.worktreePath });
             
             // Refresh git status for this session after commit

@@ -42,11 +42,17 @@ const SetupTasksPanel: React.FC<SetupTasksPanelProps> = ({ panelId, isActive }) 
       if (!response.success || !response.data) return false;
       
       const content = response.data as string;
-      // Check for common worktree patterns
-      return content.includes('/worktrees/') || 
-             content.includes('/worktree-*/') ||
-             content.includes('worktrees/') ||
-             content.includes('worktree-*/');
+      // Check for common worktree patterns (including hidden .worktrees)
+      return (
+        content.includes('/.worktrees/') ||
+        content.includes('/.worktree-*/') ||
+        content.includes('.worktrees/') ||
+        content.includes('.worktree-*/') ||
+        content.includes('/worktrees/') ||
+        content.includes('/worktree-*/') ||
+        content.includes('worktrees/') ||
+        content.includes('worktree-*/')
+      );
     } catch (error) {
       // If .gitignore doesn't exist, that's ok - it's not found
       return false;
@@ -107,7 +113,7 @@ const SetupTasksPanel: React.FC<SetupTasksPanelProps> = ({ panelId, isActive }) 
     const confirmed = window.confirm(
       'Crystal will add worktree patterns to .gitignore and create a new commit.\n\n' +
       'This will:\n' +
-      '• Add /worktrees/ and /worktree-*/ patterns to .gitignore\n' +
+      '• Add /.worktrees/ and /.worktree-*/ patterns to .gitignore\n' +
       '• Create a commit with only these changes\n' +
       '• Leave any other uncommitted changes untouched\n\n' +
       'Proceed?'
@@ -140,8 +146,8 @@ const SetupTasksPanel: React.FC<SetupTasksPanelProps> = ({ panelId, isActive }) 
       // Add worktree patterns if not already present
       const patterns = [
         '\n# Git worktrees (Crystal)',
-        '/worktrees/',
-        '/worktree-*/'
+        '/.worktrees/',
+        '/.worktree-*/'
       ];
       
       let needsUpdate = false;
@@ -199,8 +205,8 @@ const SetupTasksPanel: React.FC<SetupTasksPanelProps> = ({ panelId, isActive }) 
         // Create the commit
         const commitMessage = 'Add Crystal worktree patterns to .gitignore\n\n' +
           'Added patterns to ignore Crystal worktree directories:\n' +
-          '- /worktrees/\n' +
-          '- /worktree-*/\n\n' +
+          '- /.worktrees/\n' +
+          '- /.worktree-*/\n\n' +
           'This prevents git from tracking temporary Crystal session directories.';
         
         const gitCommitResponse = await window.electronAPI.git.executeProject(

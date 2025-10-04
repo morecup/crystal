@@ -24,13 +24,17 @@ const CombinedDiffView: React.FC<CombinedDiffViewProps> = memo(({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
-  const [modifiedFiles, setModifiedFiles] = useState<Set<string>>(new Set());
   const [showCommitDialog, setShowCommitDialog] = useState(false);
   const [mainBranch, setMainBranch] = useState<string>('main');
   const [historySource, setHistorySource] = useState<'remote' | 'local' | 'branch'>(isMainRepo ? 'remote' : 'branch');
   const [lastVisibleState, setLastVisibleState] = useState<boolean>(isVisible);
   const [forceRefresh, setForceRefresh] = useState<number>(0);
   const [selectedFile, setSelectedFile] = useState<string | undefined>();
+  // 计算未提交变更的文件数量（来自 Git 实时状态，而非本地编辑计数）
+  const uncommittedFileCount = useMemo(() => {
+    const uncommitted = executions.find(e => e.id === 0);
+    return uncommitted?.stats_files_changed ?? 0;
+  }, [executions]);
   
   const diffViewerRef = useRef<DiffViewerHandle>(null);
 
@@ -59,7 +63,6 @@ const CombinedDiffView: React.FC<CombinedDiffViewProps> = memo(({
     if (sessionId !== lastSessionId) {
       setSelectedExecutions([]);
       setLastSessionId(sessionId);
-      setModifiedFiles(new Set());
       setCombinedDiff(null);
       setExecutions([]);
       setSelectedFile(undefined);
@@ -239,11 +242,8 @@ const CombinedDiffView: React.FC<CombinedDiffViewProps> = memo(({
   };
 
   const handleFileSave = useCallback((filePath: string) => {
-    setModifiedFiles(prev => {
-      const newSet = new Set(prev);
-      newSet.add(filePath);
-      return newSet;
-    });
+    // 参数用于满足回调签名，避免未使用告警
+    void filePath;
     
     // Refresh executions list to show uncommitted changes
     const refreshExecutions = async () => {
@@ -289,8 +289,7 @@ const CombinedDiffView: React.FC<CombinedDiffViewProps> = memo(({
       throw new Error(result.error || 'Failed to commit changes');
     }
     
-    // Clear modified files after successful commit
-    setModifiedFiles(new Set());
+    // 提交成功后，由于我们基于 Git 状态实时统计，无需维护本地 modifiedFiles 集
     
     // Reload executions to reflect the new commit
     const response = await API.sessions.getExecutions(sessionId);
@@ -298,6 +297,22 @@ const CombinedDiffView: React.FC<CombinedDiffViewProps> = memo(({
       setExecutions(response.data);
     }
   }, [sessionId]);
+
+  // 当打开提交弹窗时，刷新一次 executions，确保文件数是最新的 Git 状态
+  useEffect(() => {
+    if (!showCommitDialog) return;
+    const refresh = async () => {
+      try {
+        const res = await API.sessions.getExecutions(sessionId);
+        if (res.success && Array.isArray(res.data)) {
+          setExecutions(res.data);
+        }
+      } catch {
+        // 忽略刷新失败，沿用现有数据
+      }
+    };
+    refresh();
+  }, [showCommitDialog, sessionId]);
 
   const handleRevert = useCallback(async (commitHash: string) => {
     if (!window.confirm(`Are you sure you want to revert commit ${commitHash.substring(0, 7)}? This will create a new commit that undoes the changes.`)) {
@@ -404,12 +419,7 @@ const CombinedDiffView: React.FC<CombinedDiffViewProps> = memo(({
         throw new Error(result.error || 'Failed to delete file');
       }
       
-      // Clear modified files if the deleted file was modified
-      setModifiedFiles(prev => {
-        const newSet = new Set(prev);
-        newSet.delete(filePath);
-        return newSet;
-      });
+      // 文件删除后，依赖 Git 状态刷新，无需维护本地 modifiedFiles 集
       
       // Reload executions to reflect the deletion
       const response = await API.sessions.getExecutions(sessionId);
@@ -455,8 +465,7 @@ const CombinedDiffView: React.FC<CombinedDiffViewProps> = memo(({
         throw new Error(result.error || 'Failed to restore changes');
       }
       
-      // Clear modified files after successful restore
-      setModifiedFiles(new Set());
+      // 还原完成后，依赖 Git 状态刷新，无需维护本地 modifiedFiles 集
       
       // Reload executions and diff
       const response = await API.sessions.getExecutions(sessionId);
@@ -664,7 +673,8 @@ const CombinedDiffView: React.FC<CombinedDiffViewProps> = memo(({
         isOpen={showCommitDialog}
         onClose={() => setShowCommitDialog(false)}
         onCommit={handleCommit}
-        fileCount={modifiedFiles.size}
+        // 使用 Git 实际未提交变更文件数量，避免一直显示为 0
+        fileCount={uncommittedFileCount}
       />
     </div>
   );
