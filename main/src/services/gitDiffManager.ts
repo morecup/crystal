@@ -221,7 +221,8 @@ export class GitDiffManager {
    */
   getCommitDiff(worktreePath: string, commitHash: string): GitDiffResult {
     try {
-      const diff = execSync(`git show --format= ${commitHash}`, {
+      // 使用 --patch 明确输出补丁内容，并加 -m 以兼容合并提交
+      const diff = execSync(`git show --format= --patch -m ${commitHash}`, {
         cwd: worktreePath,
         encoding: 'utf8',
         maxBuffer: 10 * 1024 * 1024
@@ -252,8 +253,9 @@ export class GitDiffManager {
    */
   private getCommitStats(worktreePath: string, commitHash: string): GitDiffStats {
     try {
+      // 与 getCommitDiff 保持一致，使用 -m 以在合并提交时输出各父提交的统计汇总
       const fullOutput = execSync(
-        `git show --stat --format= ${commitHash}`,
+        `git show --stat --format= -m ${commitHash}`,
         { cwd: worktreePath, encoding: 'utf8' }
       );
       // Get the last line manually instead of using tail
