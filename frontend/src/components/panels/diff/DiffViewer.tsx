@@ -5,6 +5,19 @@ import type { DiffViewerProps } from '../../../types/diff';
 import type { FileDiff } from '../../../types/diff';
 import { useTheme } from '../../../contexts/ThemeContext';
 
+// 软上限：单个文件差异超过该大小时不渲染，单位：字节（按字符串长度近似）
+const DEFAULT_MAX_FILE_DIFF_BYTES = 5 * 1024 * 1024; // 5MB
+// 并发上限：批量读取文件内容时的最大并发，避免瞬时内存峰值
+const MAX_PARALLEL_FILE_READS = 3;
+
+// 允许通过 localStorage 来覆盖软上限值（便于高级用户调优）
+function getMaxFileDiffBytes(): number {
+  const raw = typeof window !== 'undefined' ? window.localStorage?.getItem('diff.maxFileBytes') : null;
+  if (!raw) return DEFAULT_MAX_FILE_DIFF_BYTES;
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? n : DEFAULT_MAX_FILE_DIFF_BYTES;
+}
+
 // Parse unified diff format to extract individual file diffs
 const parseUnifiedDiff = (diff: string): FileDiff[] => {
   const files: FileDiff[] = [];
@@ -25,6 +38,8 @@ const parseUnifiedDiff = (diff: string): FileDiff[] => {
   
   console.log('parseUnifiedDiff: Found', fileMatches.length, 'file(s) in diff');
   
+  const maxBytes = getMaxFileDiffBytes();
+
   for (const fileContent of fileMatches) {
     // Try multiple patterns to extract file names
     let fileNameMatch = fileContent.match(/diff --git a\/(.*?) b\/(.*?)(?:\n|$)/);
@@ -43,6 +58,8 @@ const parseUnifiedDiff = (diff: string): FileDiff[] => {
     const newFileName = fileNameMatch[2] || '';
     
     const isBinary = fileContent.includes('Binary files') || fileContent.includes('GIT binary patch');
+    const approxSize = fileContent.length;
+    const tooLarge = approxSize > maxBytes;
     
     let type: 'added' | 'deleted' | 'modified' | 'renamed' = 'modified';
     if (fileContent.includes('new file mode')) {
@@ -63,10 +80,12 @@ const parseUnifiedDiff = (diff: string): FileDiff[] => {
         isBinary: true,
         additions: 0,
         deletions: 0,
+        tooLarge: false,
+        approxSize,
       });
       continue;
     }
-    
+
     const lines = fileContent.split('\n');
     const diffStartIndex = lines.findIndex(line => line.startsWith('@@'));
     
@@ -80,15 +99,50 @@ const parseUnifiedDiff = (diff: string): FileDiff[] => {
         isBinary: false,
         additions: 0,
         deletions: 0,
+        tooLarge: false,
+        approxSize,
       });
       continue;
     }
-    
+
     const oldLines: string[] = [];
     const newLines: string[] = [];
     let additions = 0;
     let deletions = 0;
-    
+
+    if (tooLarge) {
+      // 体积过大：仅统计增删行，避免构建大字符串，降低内存占用
+      for (let i = diffStartIndex; i < lines.length; i++) {
+        const line = lines[i];
+        if (line.startsWith('@@')) {
+          continue;
+        } else if (line.startsWith('-')) {
+          deletions++;
+        } else if (line.startsWith('+')) {
+          additions++;
+        } else {
+          // 其他行（空格、\\等）不计入
+        }
+      }
+      const fileDiff: FileDiff = {
+        path: newFileName || '',
+        oldPath: oldFileName || '',
+        oldValue: '',
+        newValue: '',
+        type,
+        isBinary: false,
+        additions,
+        deletions,
+        tooLarge: true,
+        approxSize,
+      };
+      if (!fileDiff.path) {
+        console.error('parseUnifiedDiff: File path is empty for diff:', fileContent.substring(0, 100));
+      }
+      files.push(fileDiff);
+      continue;
+    }
+
     for (let i = diffStartIndex; i < lines.length; i++) {
       const line = lines[i];
       if (line.startsWith('@@')) {
@@ -109,7 +163,7 @@ const parseUnifiedDiff = (diff: string): FileDiff[] => {
         newLines.push('');
       }
     }
-    
+
     const fileDiff: FileDiff = {
       path: newFileName || '',
       oldPath: oldFileName || '',
@@ -119,6 +173,8 @@ const parseUnifiedDiff = (diff: string): FileDiff[] => {
       isBinary: false,
       additions,
       deletions,
+      tooLarge: false,
+      approxSize,
     };
     
     if (!fileDiff.path) {
@@ -166,6 +222,35 @@ const DiffViewer = memo(forwardRef<DiffViewerHandle, DiffViewerProps>(({ diff, s
     }
   }, [diff]);
 
+  // 简单的并发控制器，限制批量任务并发度
+  async function mapWithConcurrency<T, R>(items: T[], limit: number, mapper: (item: T, index: number) => Promise<R>): Promise<R[]> {
+    const results: R[] = new Array(items.length);
+    let next = 0;
+    let active = 0;
+    return new Promise((resolve, reject) => {
+      const launchNext = () => {
+        if (next >= items.length && active === 0) {
+          resolve(results);
+          return;
+        }
+        while (active < limit && next < items.length) {
+          const current = next++;
+          active++;
+          Promise.resolve(mapper(items[current], current))
+            .then((res) => {
+              results[current] = res;
+              active--;
+              launchNext();
+            })
+            .catch((err) => {
+              reject(err);
+            });
+        }
+      };
+      launchNext();
+    });
+  }
+
   // Load full file contents when in edit mode
   useEffect(() => {
     const loadFullFileContents = async () => {
@@ -180,10 +265,17 @@ const DiffViewer = memo(forwardRef<DiffViewerHandle, DiffViewerProps>(({ diff, s
 
       try {
         const errors: Record<string, string> = {};
-        const updatedFiles = await Promise.all(
-          files.map(async (file) => {
+        const updatedFiles = await mapWithConcurrency(
+          files,
+          MAX_PARALLEL_FILE_READS,
+          async (file) => {
             // Skip binary files, deleted files, or files that already seem to have full content
             if (file.isBinary || file.type === 'deleted' || !file.path) {
+              return file;
+            }
+
+            // 过大文件：不尝试加载完整内容，保持只读并跳过渲染（由渲染逻辑处理）
+            if ((file as FileDiff).tooLarge) {
               return file;
             }
 
@@ -268,7 +360,7 @@ const DiffViewer = memo(forwardRef<DiffViewerHandle, DiffViewerProps>(({ diff, s
               errors[file.path] = error instanceof Error ? error.message : 'Failed to load file content';
               return file;
             }
-          })
+          }
         );
 
         setFilesWithFullContent(updatedFiles);
@@ -393,12 +485,12 @@ const DiffViewer = memo(forwardRef<DiffViewerHandle, DiffViewerProps>(({ diff, s
             // Skip files with invalid paths
             if (!file.path) {
               console.error('File with undefined path found:', file);
-              return null;
-            }
-            
-            const fileKey = `${file.path}-${index}`;
-            const isExpanded = expandedFiles.has(fileKey);
-            const isModified = false; // Modification tracking moved to parent component
+          return null;
+        }
+
+        const fileKey = `${file.path}-${index}`;
+        const isExpanded = expandedFiles.has(fileKey);
+        const isModified = false; // Modification tracking moved to parent component
             
             if (file.isBinary || (!file.oldValue && !file.newValue && file.type !== 'added' && file.type !== 'deleted')) {
               return (
@@ -455,6 +547,25 @@ const DiffViewer = memo(forwardRef<DiffViewerHandle, DiffViewerProps>(({ diff, s
                     {file.type === 'deleted' ? (
                       <div className="p-4 bg-surface-secondary text-text-secondary">
                         <p className="text-sm">This file has been deleted from the filesystem.</p>
+                      </div>
+                    ) : file.tooLarge ? (
+                      <div className="p-4 bg-surface-secondary text-text-secondary">
+                        <div className="flex items-start gap-3">
+                          <svg className="w-5 h-5 text-status-warning flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01M12 5a7 7 0 00-7 7v0a7 7 0 0014 0v0a7 7 0 00-7-7z" />
+                          </svg>
+                          <div>
+                            <p className="text-sm font-medium text-text-primary">当前文件过大，已禁用渲染（避免 OOM）</p>
+                            <p className="text-xs text-text-tertiary mt-1">
+                              估算大小：{((file.approxSize || 0) / (1024 * 1024)).toFixed(2)} MB（上限 { (getMaxFileDiffBytes() / (1024 * 1024)).toFixed(0) } MB）。
+                            </p>
+                            <ul className="list-disc list-inside mt-2 text-xs text-text-secondary space-y-1">
+                              <li>已保留该文件的增删行统计，供概要查看</li>
+                              <li>如需查看内容，建议用外部编辑器打开文件</li>
+                              <li>可在 localStorage 设置键 `diff.maxFileBytes` 调整阈值</li>
+                            </ul>
+                          </div>
+                        </div>
                       </div>
                     ) : (
                       <>

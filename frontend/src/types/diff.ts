@@ -42,6 +42,10 @@ export interface FileDiff {
   isBinary: boolean;
   additions: number;
   deletions: number;
+  // 是否因体积过大而跳过渲染（软上限）
+  tooLarge?: boolean;
+  // 近似大小（以字符数计），用于提示信息
+  approxSize?: number;
 }
 
 export interface DiffViewerProps {
