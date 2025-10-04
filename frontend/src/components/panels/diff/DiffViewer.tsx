@@ -206,10 +206,9 @@ const DiffViewer = memo(forwardRef<DiffViewerHandle, DiffViewerProps>(({ diff, s
                   };
                 }
                 
-                // For modified files, get the file content at the base revision for comparison
-                // When all commits are selected, compare against the main branch
-                // Otherwise, compare against HEAD
-                const baseRevision = isAllCommitsSelected ? mainBranch : 'HEAD';
+                // 对比基线统一使用当前分支最新提交（HEAD），避免当选择全部提交时使用创建时的主分支（如 dev）导致内容与统计不一致
+                // 这样“增减行数”和“具体差异内容”都与当前分支保持一致
+                const baseRevision = 'HEAD';
                 
                 try {
                   const headResult = await window.electronAPI.invoke('file:readAtRevision', {
