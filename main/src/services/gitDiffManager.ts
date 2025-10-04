@@ -102,6 +102,8 @@ export class GitDiffManager {
     try {
       // Get commit log with stats, excluding commits that are in main branch
       // This shows only commits unique to the current branch
+      // 这里只用 subject(%s) 作为头部行，方便与 --numstat 解析；
+      // 完整提交信息（含多行 body）在下方额外一次性批量获取并回填，避免 numstat 解析被打乱。
       const logFormat = '%H|%s|%ai|%an';
       const gitCommand = `git log --format="${logFormat}" --numstat -n ${limit} HEAD --not ${mainBranch} --`;
       
@@ -157,6 +159,30 @@ export class GitDiffManager {
           // Collect stat lines
           statsLines.push(line);
         }
+      }
+
+      // 批量获取完整提交信息（包含多行 body），并回填到 commits
+      // 使用 NUL 分隔，避免换行干扰解析
+      try {
+        const fullFormat = '%H%x00%B%x00'; // <hash>\0<full_message>\0
+        const fullCmd = `git log --format="${fullFormat}" -n ${limit} HEAD --not ${mainBranch} --`;
+        const fullOutput = execSync(fullCmd, { cwd: worktreePath, encoding: 'utf8', maxBuffer: 10 * 1024 * 1024 });
+        const parts = fullOutput.split('\x00').filter(Boolean);
+        const fullMap = new Map<string, string>();
+        for (let i = 0; i + 1 < parts.length; i += 2) {
+          const h = parts[i];
+          const msg = (parts[i + 1] || '').trim();
+          fullMap.set(h, msg);
+        }
+        for (const c of commits) {
+          const full = fullMap.get(c.hash);
+          if (full && full.length > 0) {
+            c.message = full;
+          }
+        }
+      } catch (e) {
+        // 如果批量获取失败，保留 subject，不影响现有逻辑
+        this.logger?.warn?.(`[GitDiffManager] Failed to load full commit messages: ${e instanceof Error ? e.message : String(e)}`);
       }
 
       // Process last commit's stats
