@@ -54,6 +54,8 @@ export interface DiffViewerProps {
   sessionId?: string;
   onFileSave?: (filePath: string) => void;
   mainBranch?: string;
+  beforeCommitHash?: string;  // 对比基线的 commit hash
+  afterCommitHash?: string;   // 当前 commit hash
 }
 
 export interface ExecutionListProps {

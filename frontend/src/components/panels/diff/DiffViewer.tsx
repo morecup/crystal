@@ -181,7 +181,7 @@ export interface DiffViewerHandle {
   scrollToFile: (index: number) => void;
 }
 
-const DiffViewer = memo(forwardRef<DiffViewerHandle, DiffViewerProps>(({ diff, sessionId, className = '', onFileSave, mainBranch = 'main' }, ref) => {
+const DiffViewer = memo(forwardRef<DiffViewerHandle, DiffViewerProps>(({ diff, sessionId, className = '', onFileSave, mainBranch = 'main', beforeCommitHash, afterCommitHash }, ref) => {
   const { theme } = useTheme();
   const { config } = useConfigStore();
   const [viewType, setViewType] = useState<'split' | 'inline'>('split');
@@ -318,28 +318,21 @@ const DiffViewer = memo(forwardRef<DiffViewerHandle, DiffViewerProps>(({ diff, s
                   };
                 }
 
-                // 对比基线统一使用当前分支最新提交（HEAD），避免当选择全部提交时使用创建时的主分支（如 dev）导致内容与统计不一致
-                // 这样"增减行数"和"具体差异内容"都与当前分支保持一致
-                const baseRevision = 'HEAD';
+                // 确定对比基线和当前版本:
+                // - 如果有 beforeCommitHash 和 afterCommitHash,使用这两个 commit 进行对比 (查看历史 commit)
+                // - 否则使用 HEAD 与工作目录对比 (查看未提交变更)
+                const baseRevision = beforeCommitHash || 'HEAD';
+                const currentRevision = afterCommitHash; // 如果是 undefined,使用工作目录
 
                 try {
-                  const headResult = await window.electronAPI.invoke('file:readAtRevision', {
+                  // 加载基线版本
+                  const baseResult = await window.electronAPI.invoke('file:readAtRevision', {
                     sessionId,
                     filePath: file.path,
                     revision: baseRevision
                   });
 
-                  if (headResult.success && headResult.content !== undefined) {
-                    console.log(`Loaded ${baseRevision} content for ${file.path}: ${headResult.content.length} characters`);
-                    return {
-                      ...file,
-                      oldValue: headResult.content,  // File content at base revision
-                      newValue: result.content,       // Current working directory content
-                      originalDiffNewValue: file.newValue,
-                      originalDiffOldValue: file.oldValue
-                    };
-                  } else {
-                    // File might not exist in the base revision (e.g., new file)
+                  if (!baseResult.success || baseResult.content === undefined) {
                     console.warn(`Failed to load ${baseRevision} content for ${file.path}, file may not exist in ${baseRevision}`);
                     return {
                       ...file,
@@ -349,13 +342,45 @@ const DiffViewer = memo(forwardRef<DiffViewerHandle, DiffViewerProps>(({ diff, s
                       originalDiffOldValue: file.oldValue
                     };
                   }
-                } catch (headError) {
-                  console.error(`Error loading ${baseRevision} content for ${file.path}:`, headError);
-                  // File likely doesn't exist in base revision
+
+                  console.log(`Loaded ${baseRevision} content for ${file.path}: ${baseResult.content.length} characters`);
+
+                  // 加载当前版本
+                  let currentContent: string;
+                  if (currentRevision) {
+                    // 从指定 commit 读取
+                    const currentResult = await window.electronAPI.invoke('file:readAtRevision', {
+                      sessionId,
+                      filePath: file.path,
+                      revision: currentRevision
+                    });
+
+                    if (currentResult.success && currentResult.content !== undefined) {
+                      currentContent = currentResult.content;
+                      console.log(`Loaded ${currentRevision} content for ${file.path}: ${currentContent.length} characters`);
+                    } else {
+                      console.warn(`Failed to load ${currentRevision} content for ${file.path}`);
+                      currentContent = result.content; // Fallback to working directory
+                    }
+                  } else {
+                    // 使用工作目录内容
+                    currentContent = result.content;
+                  }
+
                   return {
                     ...file,
-                    oldValue: '',  // File doesn't exist in base revision
-                    newValue: result.content,       // Current working directory content
+                    oldValue: baseResult.content,  // File content at base revision
+                    newValue: currentContent,       // File content at current revision or working directory
+                    originalDiffNewValue: file.newValue,
+                    originalDiffOldValue: file.oldValue
+                  };
+                } catch (error) {
+                  console.error(`Error loading file content for ${file.path}:`, error);
+                  // Fallback
+                  return {
+                    ...file,
+                    oldValue: '',
+                    newValue: result.content,
                     originalDiffNewValue: file.newValue,
                     originalDiffOldValue: file.oldValue
                   };
@@ -394,7 +419,7 @@ const DiffViewer = memo(forwardRef<DiffViewerHandle, DiffViewerProps>(({ diff, s
     };
 
     loadFullFileContents();
-  }, [files, showFullContent, sessionId, mainBranch, parallelLimit]);
+  }, [files, showFullContent, sessionId, mainBranch, parallelLimit, beforeCommitHash, afterCommitHash]);
 
   useEffect(() => {
     // Expand all files by default
@@ -482,9 +507,9 @@ const DiffViewer = memo(forwardRef<DiffViewerHandle, DiffViewerProps>(({ diff, s
                     ? 'bg-interactive text-white'
                     : 'text-text-secondary hover:bg-surface-hover'
                 }`}
-                title="显示差异片段"
+                title="仅显示差异片段"
               >
-                差异
+                仅差异
               </button>
               <button
                 onClick={() => handleShowFullContentChange(true)}
@@ -493,7 +518,7 @@ const DiffViewer = memo(forwardRef<DiffViewerHandle, DiffViewerProps>(({ diff, s
                     ? 'bg-interactive text-white'
                     : 'text-text-secondary hover:bg-surface-hover'
                 }`}
-                title="显示完整文件内容"
+                title="显示完整文件内容(带差异高亮)"
               >
                 完整文件
               </button>

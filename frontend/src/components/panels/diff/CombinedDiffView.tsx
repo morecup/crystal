@@ -671,6 +671,8 @@ const CombinedDiffView: React.FC<CombinedDiffViewProps> = memo(({
               className="h-full"
               onFileSave={handleFileSave}
               mainBranch={mainBranch}
+              beforeCommitHash={combinedDiff.beforeHash}
+              afterCommitHash={combinedDiff.afterHash}
             />
           ) : executions.length === 0 ? (
             <div className="flex items-center justify-center h-full text-text-secondary">
