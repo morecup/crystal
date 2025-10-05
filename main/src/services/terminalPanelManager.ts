@@ -108,30 +108,6 @@ export class TerminalPanelManager {
       const bashCmd = `tmux new-session -As ${qName} -c ${qRepo}`;
       spawnArgs = ['-e', 'bash', '-lc', bashCmd];
       console.log('[TerminalPanelManager] Spawning WSL tmux session:', bashCmd);
-      // 会话创建后，配置 tmux：启用鼠标与“选择即复制”到 Windows 剪贴板
-      try {
-        const cfgCmd = [
-          `tmux set-option -t ${qName} mouse on`,
-          `tmux set-option -t ${qName} set-clipboard on 2>/dev/null || true`,
-          // 粘贴相关优化：启用粘贴时间阈值，减少自动加回车等副作用
-          `tmux set-option -g assume-paste-time 1 2>/dev/null || true`,
-          `tmux unbind -T copy-mode-vi MouseDragEnd1Pane 2>/dev/null || true`,
-          `tmux bind-key -T copy-mode-vi MouseDragEnd1Pane send -X copy-pipe-and-cancel 'clip.exe'`,
-          `tmux unbind -T copy-mode MouseDragEnd1Pane 2>/dev/null || true`,
-          `tmux bind-key -T copy-mode MouseDragEnd1Pane send -X copy-pipe-and-cancel 'clip.exe'`,
-          `tmux unbind -T copy-mode-vi y 2>/dev/null || true`,
-          `tmux bind-key -T copy-mode-vi y send -X copy-pipe-and-cancel 'clip.exe'`,
-          `tmux unbind -T copy-mode y 2>/dev/null || true`,
-          `tmux bind-key -T copy-mode y send -X copy-pipe-and-cancel 'clip.exe'`,
-          // 中键粘贴：将 tmux buffer 粘贴到当前 pane（不进入 copy-mode）
-          `tmux unbind -n MouseDown3Pane 2>/dev/null || true`,
-          `tmux bind-key -n MouseDown3Pane paste-buffer -p`
-        ].join('; ');
-        execFileSync('wsl.exe', ['-e', 'bash', '-lc', cfgCmd], { encoding: 'utf-8' as any });
-        console.log('[TerminalPanelManager] Applied tmux mouse/copy config for session:', sessionName);
-      } catch (e) {
-        console.warn('[TerminalPanelManager] Failed to configure tmux copy bindings:', e);
-      }
     }
 
     const ptyProcess = pty.spawn(shellInfo.path, spawnArgs || [], {
