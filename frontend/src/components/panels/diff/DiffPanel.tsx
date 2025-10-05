@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback, useRef } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import CombinedDiffView from './CombinedDiffView';
 import type { ToolPanel, DiffPanelState } from '../../../../../shared/types/panels';
 import { RefreshCw, AlertCircle } from 'lucide-react';
@@ -82,29 +82,7 @@ export const DiffPanel: React.FC<DiffPanelProps> = ({
       return () => clearTimeout(timer);
     }
   }, [isActive, isStale, panel.id, sessionId, panel.state, diffState]);
-  
-  const handleManualRefresh = useCallback(() => {
-    setIsStale(false);
-    setIsRefreshing(true);
-    
-    setTimeout(() => {
-      lastRefreshRef.current = Date.now();
-      setIsRefreshing(false);
-      
-      // Update panel state
-      window.electron?.invoke('panels:update', panel.id, {
-        state: {
-          ...panel.state,
-          customState: {
-            ...diffState,
-            lastRefresh: new Date().toISOString(),
-            isDiffStale: false
-          }
-        }
-      });
-    }, 500);
-  }, [panel.id, panel.state, diffState]);
-  
+
   return (
     <div className="diff-panel h-full flex flex-col bg-gray-800">
       {/* Stale indicator bar */}
@@ -116,7 +94,7 @@ export const DiffPanel: React.FC<DiffPanelProps> = ({
           </div>
         </div>
       )}
-      
+
       {/* Refresh indicator */}
       {isRefreshing && (
         <div className="bg-blue-900/50 border-b border-blue-700 px-3 py-2 flex items-center gap-2 text-blue-400 text-sm">
@@ -124,28 +102,16 @@ export const DiffPanel: React.FC<DiffPanelProps> = ({
           <span>Refreshing diff...</span>
         </div>
       )}
-      
+
       {/* Main diff view */}
       <div className="flex-1 overflow-hidden">
-        <CombinedDiffView 
+        <CombinedDiffView
           sessionId={sessionId}
           selectedExecutions={[]}
           isGitOperationRunning={false}
           isMainRepo={isMainRepo}
           isVisible={isActive}
         />
-      </div>
-      
-      {/* Manual refresh button (always visible) */}
-      <div className="border-t border-gray-700 px-3 py-2">
-        <button
-          onClick={handleManualRefresh}
-          disabled={isRefreshing}
-          className="flex items-center gap-2 px-3 py-1 bg-gray-700 hover:bg-gray-600 disabled:opacity-50 disabled:cursor-not-allowed rounded text-sm text-gray-300"
-        >
-          <RefreshCw className={`w-4 h-4 ${isRefreshing ? 'animate-spin' : ''}`} />
-          <span>Refresh Diff</span>
-        </button>
       </div>
     </div>
   );
