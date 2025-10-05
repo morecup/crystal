@@ -1,6 +1,6 @@
-import { useState, useEffect, useMemo, memo, useCallback, forwardRef, useImperativeHandle, useRef } from 'react';
+import { useState, useEffect, useMemo, memo, useCallback, forwardRef, useImperativeHandle } from 'react';
 import { MonacoDiffViewer } from './MonacoDiffViewer';
-import { FileText, ChevronRight, ChevronDown } from 'lucide-react';
+import { FileText } from 'lucide-react';
 import type { DiffViewerProps } from '../../../types/diff';
 import type { FileDiff } from '../../../types/diff';
 import { useTheme } from '../../../contexts/ThemeContext';
@@ -186,12 +186,10 @@ const DiffViewer = memo(forwardRef<DiffViewerHandle, DiffViewerProps>(({ diff, s
   const { config } = useConfigStore();
   const [viewType, setViewType] = useState<'split' | 'inline'>('split');
   const [showFullContent, setShowFullContent] = useState(false);
-  const [expandedFiles, setExpandedFiles] = useState<Set<string>>(new Set());
-  const [activeIndex, setActiveIndex] = useState<number | null>(null);
+  const [currentFileIndex, setCurrentFileIndex] = useState(0);
   const [filesWithFullContent, setFilesWithFullContent] = useState<FileDiff[]>([]);
   const [loadingFullContent, setLoadingFullContent] = useState(false);
   const [loadErrors, setLoadErrors] = useState<Record<string, string>>({});
-  const scrollContainerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const savedViewType = localStorage.getItem('diffViewType');
@@ -425,60 +423,25 @@ const DiffViewer = memo(forwardRef<DiffViewerHandle, DiffViewerProps>(({ diff, s
     loadFullFileContents();
   }, [files, showFullContent, sessionId, mainBranch, parallelLimit, beforeCommitHash, afterCommitHash]);
 
-  // 记住当前激活文件，文件列表变化时尽量保持不变，避免界面闪烁
-  const activePathRef = useRef<string | null>(null);
-
-  useEffect(() => {
-    if (activeIndex !== null && files[activeIndex]) {
-      activePathRef.current = files[activeIndex].path;
-    }
-  }, [activeIndex, files]);
-
+  // 重置当前文件索引
   useEffect(() => {
     if (files.length === 0) {
-      setExpandedFiles(new Set());
-      setActiveIndex(null);
-      activePathRef.current = null;
-      return;
+      setCurrentFileIndex(0);
+    } else if (currentFileIndex >= files.length) {
+      setCurrentFileIndex(Math.max(0, files.length - 1));
     }
+  }, [files, currentFileIndex]);
 
-    // 初次加载或没有激活项时，默认选择第一个
-    if (activeIndex === null) {
-      const key = `${files[0].path}-0`;
-      setExpandedFiles(new Set([key]));
-      setActiveIndex(0);
-      activePathRef.current = files[0].path;
-      return;
+  const handlePrevFile = () => {
+    if (currentFileIndex > 0) {
+      setCurrentFileIndex(currentFileIndex - 1);
     }
+  };
 
-    // 尝试在新列表中找到相同路径
-    const prevPath = activePathRef.current;
-    if (prevPath) {
-      const idx = files.findIndex(f => f.path === prevPath);
-      if (idx !== -1) {
-        const key = `${files[idx].path}-${idx}`;
-        setExpandedFiles(new Set([key]));
-        setActiveIndex(idx);
-        return;
-      }
+  const handleNextFile = () => {
+    if (currentFileIndex < files.length - 1) {
+      setCurrentFileIndex(currentFileIndex + 1);
     }
-
-    // 否则保持索引不变（若越界则选末尾）
-    const nextIndex = Math.min(activeIndex, files.length - 1);
-    const key = `${files[nextIndex].path}-${nextIndex}`;
-    setExpandedFiles(new Set([key]));
-    setActiveIndex(nextIndex);
-    activePathRef.current = files[nextIndex].path;
-  }, [files]);
-
-  const toggleFile = (fileKey: string, index: number) => {
-    setExpandedFiles(() => {
-      const newSet = new Set<string>();
-      // 单选展开：只保留当前展开项，避免多实例编辑器
-      newSet.add(fileKey);
-      return newSet;
-    });
-    setActiveIndex(index);
   };
 
   const handleFileSave = useCallback((filePath: string) => {
@@ -490,22 +453,11 @@ const DiffViewer = memo(forwardRef<DiffViewerHandle, DiffViewerProps>(({ diff, s
   // Expose scroll function to parent
   useImperativeHandle(ref, () => ({
     scrollToFile: (index: number) => {
-      const fileElement = document.getElementById(`file-${index}`);
-      if (fileElement && scrollContainerRef.current) {
-        // First expand the file if it's collapsed
-        const fileKey = `${files[index]?.path}-${index}`;
-        if (fileKey && !expandedFiles.has(fileKey)) {
-          setExpandedFiles(prev => new Set([...prev, fileKey]));
-        }
-        setActiveIndex(index);
-        
-        // Then scroll to it with a small delay to allow expansion animation
-        setTimeout(() => {
-          fileElement.scrollIntoView({ behavior: 'smooth', block: 'start' });
-        }, 3);
+      if (index >= 0 && index < files.length) {
+        setCurrentFileIndex(index);
       }
     }
-  }), [files, expandedFiles]);
+  }), [files]);
 
   if (!diff || diff.trim() === '' || files.length === 0) {
     return (
@@ -528,6 +480,7 @@ const DiffViewer = memo(forwardRef<DiffViewerHandle, DiffViewerProps>(({ diff, s
 
   // Use files with full content when available
   const filesToRender = filesWithFullContent.length > 0 ? filesWithFullContent : files;
+  const currentFile = filesToRender[currentFileIndex];
 
   return (
     <div className={`diff-viewer ${className}`} style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
@@ -537,6 +490,27 @@ const DiffViewer = memo(forwardRef<DiffViewerHandle, DiffViewerProps>(({ diff, s
             <span className="text-sm text-text-secondary">
               {filesToRender.length} {filesToRender.length === 1 ? 'file' : 'files'} changed
             </span>
+            {filesToRender.length > 1 && currentFile && (
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={handlePrevFile}
+                  disabled={currentFileIndex === 0}
+                  className="px-2 py-1 text-xs bg-surface-primary border border-border-primary rounded hover:bg-surface-hover disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  ← Prev
+                </button>
+                <span className="text-xs text-text-tertiary">
+                  {currentFileIndex + 1} / {filesToRender.length}
+                </span>
+                <button
+                  onClick={handleNextFile}
+                  disabled={currentFileIndex === filesToRender.length - 1}
+                  className="px-2 py-1 text-xs bg-surface-primary border border-border-primary rounded hover:bg-surface-hover disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  Next →
+                </button>
+              </div>
+            )}
           </div>
 
           <div className="flex items-center space-x-4">
@@ -591,111 +565,32 @@ const DiffViewer = memo(forwardRef<DiffViewerHandle, DiffViewerProps>(({ diff, s
             </div>
           </div>
         </div>
-        
-        {/* File List (limit height to avoid outer scrolling) */}
-        <div ref={scrollContainerRef} className="flex-none max-h-64 overflow-auto">
-          {filesToRender.map((file, index) => {
-            // Skip files with invalid paths
-            if (!file.path) {
-              console.error('File with undefined path found:', file);
-          return null;
-        }
 
-        const fileKey = `${file.path}-${index}`;
-        const isExpanded = expandedFiles.has(fileKey);
-        const isModified = false; // Modification tracking moved to parent component
-            
-            if (file.isBinary || (!file.oldValue && !file.newValue && file.type !== 'added' && file.type !== 'deleted')) {
-              return (
-                <div key={fileKey} className="border-b border-border-primary">
-                  <div className="px-4 py-3 bg-surface-secondary">
-                    <div className="flex items-center justify-between">
-                      <span className="font-medium text-text-primary flex items-center gap-2">
-                        <FileText className="w-4 h-4" />
-                        {file.path}
-                      </span>
-                      <span className="text-xs text-text-tertiary">
-                        {file.isBinary ? 'Binary file' : file.type}
-                      </span>
-                    </div>
-                  </div>
-                </div>
-              );
-            }
-            
-            return (
-                <div 
-                key={fileKey} 
-                id={`file-${index}`}
-                data-file-path={file.path}
-                className="border-b border-border-primary"
-              >
-                {/* File header */}
-                <div 
-                  className="px-4 py-3 bg-surface-secondary hover:bg-surface-hover cursor-pointer transition-colors"
-                  onClick={() => toggleFile(fileKey, index)}
-                >
-                  <div className="flex items-center justify-between">
-                    <span className="font-medium text-text-primary flex items-center gap-2">
-                      {isExpanded ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
-                      <FileText className="w-4 h-4" />
-                      {file.path}
-                      {isModified && (
-                        <span className="text-xs bg-status-warning text-white px-2 py-0.5 rounded">Modified</span>
-                      )}
-                      {file.type === 'deleted' && (
-                        <span className="text-xs bg-status-error text-white px-2 py-0.5 rounded">Deleted</span>
-                      )}
-                    </span>
-                    <span className="text-xs text-text-tertiary flex items-center gap-2">
-                      {file.additions > 0 && <span className="text-status-success">+{file.additions}</span>}
-                      {file.deletions > 0 && <span className="text-status-error">-{file.deletions}</span>}
-                    </span>
-                  </div>
-                </div>
-
-                {/* Diff content */}
-                {isExpanded && (
-                  <div className="border-t border-border-primary">
-                    {file.type === 'deleted' ? (
-                      <div className="p-4 bg-surface-secondary text-text-secondary">
-                        <p className="text-sm">This file has been deleted from the filesystem.</p>
-                      </div>
-                    ) : file.tooLarge ? (
-                      <div className="p-4 bg-surface-secondary text-text-secondary">
-                        <div className="flex items-start gap-3">
-                          <svg className="w-5 h-5 text-status-warning flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01M12 5a7 7 0 00-7 7v0a7 7 0 0014 0v0a7 7 0 00-7-7z" />
-                          </svg>
-                          <div>
-                            <p className="text-sm font-medium text-text-primary">当前文件过大，已禁用渲染（避免 OOM）</p>
-                            <p className="text-xs text-text-tertiary mt-1">
-                              估算大小：{((file.approxSize || 0) / (1024 * 1024)).toFixed(2)} MB（上限 { (maxBytes / (1024 * 1024)).toFixed(0) } MB）。
-                            </p>
-                            <ul className="list-disc list-inside mt-2 text-xs text-text-secondary space-y-1">
-                              <li>已保留该文件的增删行统计，供概要查看</li>
-                              <li>如需查看内容，建议用外部编辑器打开文件</li>
-                              <li>可在 Diff 设置面板调整阈值与并发</li>
-                            </ul>
-                          </div>
-                        </div>
-                      </div>
-                    ) : (
-                      <div className="p-3 text-xs text-text-tertiary bg-surface-secondary">
-                        预览在下方“内容区”显示（仅保留一个编辑器以提升稳定性）。
-                      </div>
-                    )}
-                  </div>
-                )}
+        {/* Monaco Diff Viewer for current file */}
+        {currentFile && (
+          <div className="flex-1 border-t border-border-primary overflow-hidden">
+            {/* File info header */}
+            <div className="px-4 py-2 bg-surface-secondary border-b border-border-primary">
+              <div className="flex items-center justify-between">
+                <span className="font-medium text-text-primary flex items-center gap-2">
+                  <FileText className="w-4 h-4" />
+                  {currentFile.path}
+                  {currentFile.type === 'deleted' && (
+                    <span className="text-xs bg-status-error text-white px-2 py-0.5 rounded">Deleted</span>
+                  )}
+                  {currentFile.type === 'added' && (
+                    <span className="text-xs bg-status-success text-white px-2 py-0.5 rounded">Added</span>
+                  )}
+                </span>
+                <span className="text-xs text-text-tertiary flex items-center gap-2">
+                  {currentFile.additions > 0 && <span className="text-status-success">+{currentFile.additions}</span>}
+                  {currentFile.deletions > 0 && <span className="text-status-error">-{currentFile.deletions}</span>}
+                </span>
               </div>
-            );
-          })}
-        </div>
+            </div>
 
-        {/* 单实例 Monaco 区域：仅渲染激活文件，避免频繁卸载造成竞态 */}
-        {activeIndex !== null && filesToRender[activeIndex] && (
-          <div className="border-t border-border-primary">
-            {loadErrors[filesToRender[activeIndex].path] && showFullContent ? (
+            {/* Error display */}
+            {loadErrors[currentFile.path] && showFullContent && (
               <div className="p-4 bg-status-error/10 border-b border-status-error/30">
                 <div className="flex items-center gap-2 text-status-error">
                   <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -704,28 +599,53 @@ const DiffViewer = memo(forwardRef<DiffViewerHandle, DiffViewerProps>(({ diff, s
                   <span className="font-medium">Failed to load full file content</span>
                 </div>
                 <p className="mt-1 text-sm text-status-error/80">
-                  {loadErrors[filesToRender[activeIndex].path]}
+                  {loadErrors[currentFile.path]}
                 </p>
                 <p className="mt-2 text-sm text-status-error/80">
                   ⚠️ Auto-save is disabled for this file to prevent data loss. Only the diff is shown below.
                 </p>
               </div>
-            ) : null}
-            {(() => {
-              const activeFile = filesToRender[activeIndex];
-              const canEdit = !afterCommitHash && showFullContent && !loadErrors[activeFile.path];
-              return (
-            <MonacoDiffViewer
-              key={`${filesToRender[activeIndex].path}-${activeIndex}-${showFullContent ? 'full' : 'diff'}`}
-              file={filesToRender[activeIndex]}
-              sessionId={sessionId || ''}
-              isDarkMode={isDarkMode}
-              viewType={viewType}
-              onSave={() => handleFileSave(filesToRender[activeIndex].path)}
-                isReadOnly={!canEdit}
+            )}
+
+            {/* Monaco diff viewer or message */}
+            {currentFile.type === 'deleted' ? (
+              <div className="p-4 bg-surface-secondary text-text-secondary">
+                <p className="text-sm">This file has been deleted from the filesystem.</p>
+              </div>
+            ) : currentFile.isBinary ? (
+              <div className="p-4 bg-surface-secondary text-text-secondary">
+                <p className="text-sm">Binary file - cannot display diff</p>
+              </div>
+            ) : currentFile.tooLarge ? (
+              <div className="p-4 bg-surface-secondary text-text-secondary">
+                <div className="flex items-start gap-3">
+                  <svg className="w-5 h-5 text-status-warning flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01M12 5a7 7 0 00-7 7v0a7 7 0 0014 0v0a7 7 0 00-7-7z" />
+                  </svg>
+                  <div>
+                    <p className="text-sm font-medium text-text-primary">当前文件过大，已禁用渲染（避免 OOM）</p>
+                    <p className="text-xs text-text-tertiary mt-1">
+                      估算大小：{((currentFile.approxSize || 0) / (1024 * 1024)).toFixed(2)} MB（上限 { (maxBytes / (1024 * 1024)).toFixed(0) } MB）。
+                    </p>
+                    <ul className="list-disc list-inside mt-2 text-xs text-text-secondary space-y-1">
+                      <li>已保留该文件的增删行统计，供概要查看</li>
+                      <li>如需查看内容，建议用外部编辑器打开文件</li>
+                      <li>可在 Diff 设置面板调整阈值与并发</li>
+                    </ul>
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <MonacoDiffViewer
+                key={`${currentFile.path}-${currentFileIndex}-${showFullContent ? 'full' : 'diff'}`}
+                file={currentFile}
+                sessionId={sessionId || ''}
+                isDarkMode={isDarkMode}
+                viewType={viewType}
+                onSave={() => handleFileSave(currentFile.path)}
+                isReadOnly={!(!afterCommitHash && showFullContent && !loadErrors[currentFile.path])}
               />
-              );
-            })()}
+            )}
           </div>
         )}
     </div>
