@@ -190,12 +190,8 @@ const CombinedDiffView: React.FC<CombinedDiffViewProps> = memo(({
               const r = await API.sessions.getExecutionDiff(sessionId, String(selectedExecutions[0]));
               response = r;
             }
-          } else if (selectedExecutions.length === executions.length) {
-            // Get all diffs
-            console.log('Getting all diffs');
-            response = await API.sessions.getCombinedDiff(sessionId);
           } else {
-            // Get selected diffs (range)
+            // Multiple selections - always pass executionIds to get correct range
             console.log('Requesting range of diffs:', selectedExecutions);
             response = await API.sessions.getCombinedDiff(sessionId, selectedExecutions);
           }

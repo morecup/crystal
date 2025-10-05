@@ -6,7 +6,7 @@ import { panelManager } from '../services/panelManager';
 import { panelEventBus } from '../services/panelEventBus';
 import { PanelEventType, ToolPanelType, PanelEvent } from '../../../shared/types/panels';
 import type { Session } from '../types/session';
-import type { GitCommit } from '../services/gitDiffManager';
+import type { GitCommit, GitDiffResult } from '../services/gitDiffManager';
 import type { ExecException } from 'child_process';
 
 // Extended type for git system virtual panels
@@ -457,6 +457,8 @@ export function registerGitHandlers(ipcMain: IpcMain, services: AppServices): vo
 
   ipcMain.handle('sessions:get-combined-diff', async (_event, sessionId: string, executionIds?: number[]) => {
     try {
+      console.log('[get-combined-diff] Called with:', { sessionId, executionIds });
+
       // Get session to find worktree path
       const session = await sessionManager.getSession(sessionId);
       if (!session || !session.worktreePath) {
@@ -494,10 +496,12 @@ export function registerGitHandlers(ipcMain: IpcMain, services: AppServices): vo
 
       // If we have a range selection (2 IDs), use git diff between them
       if (executionIds && executionIds.length === 2) {
+        console.log('[get-combined-diff] Handling 2 selections:', executionIds);
         const sortedIds = [...executionIds].sort((a, b) => a - b);
 
         // Handle range that includes uncommitted changes
         if (sortedIds[0] === 0 || sortedIds[1] === 0) {
+          console.log('[get-combined-diff] Range includes uncommitted changes');
           // If uncommitted is in the range, get diff from the other commit to working directory
           const commitId = sortedIds[0] === 0 ? sortedIds[1] : sortedIds[0];
           const commitIndex = commitId - 1;
@@ -532,40 +536,35 @@ export function registerGitHandlers(ipcMain: IpcMain, services: AppServices): vo
           }
         }
 
-        // For regular commit ranges, we want to show all changes introduced by the selected commits
-        // - Commits are stored newest first (index 0 = newest)
-        // - User selects from older to newer visually
-        // - We need to go back one commit before the older selection to show all changes
+        // For regular commit selections, combine the diffs of selected commits only
+        console.log('[get-combined-diff] Combining diffs of selected commits');
         const newerIndex = sortedIds[0] - 1;   // Lower ID = newer commit
         const olderIndex = sortedIds[1] - 1;   // Higher ID = older commit
+        console.log('[get-combined-diff] Indices:', { newerIndex, olderIndex, commitsLength: commits.length });
 
         if (newerIndex >= 0 && newerIndex < commits.length && olderIndex >= 0 && olderIndex < commits.length) {
-          const newerCommit = commits[newerIndex]; // Newer commit
-          const olderCommit = commits[olderIndex]; // Older commit
+          const newerCommit = commits[newerIndex];
+          const olderCommit = commits[olderIndex];
+          console.log('[get-combined-diff] Commits:', {
+            newerCommit: { hash: newerCommit.hash, message: newerCommit.message },
+            olderCommit: { hash: olderCommit.hash, message: olderCommit.message }
+          });
 
-          // To show all changes introduced by the selected commits, we diff from
-          // the parent of the older commit to the newer commit
-          let fromCommitHash: string;
+          // Get individual diffs and combine them
+          const diffs: GitDiffResult[] = [];
 
-          try {
-            // Try to get the parent of the older commit
-            const parentHash = execSync(`git rev-parse ${olderCommit.hash}^`, {
-              cwd: session.worktreePath,
-              encoding: 'utf8'
-            }).trim();
-            fromCommitHash = parentHash;
-          } catch (error) {
-            // If there's no parent (initial commit), use git's empty tree hash
-            fromCommitHash = '4b825dc642cb6eb9a060e54bf8d69288fbee4904';
+          // Get diff for each selected commit
+          for (let i = olderIndex; i >= newerIndex; i--) {
+            const commit = commits[i];
+            console.log('[get-combined-diff] Getting diff for commit:', commit.hash);
+            const commitDiff = gitDiffManager.getCommitDiff(session.worktreePath, commit.hash);
+            diffs.push(commitDiff);
           }
 
-          // Use git diff to show all changes from before the range to the newest selected commit
-          const diff = await gitDiffManager.captureCommitDiff(
-            session.worktreePath,
-            fromCommitHash,
-            newerCommit.hash
-          );
-          return { success: true, data: diff };
+          // Combine the diffs
+          const combined = gitDiffManager.combineDiffs(diffs, session.worktreePath);
+          console.log('[get-combined-diff] Combined diff stats:', combined.stats);
+          return { success: true, data: combined };
         }
       }
 
@@ -656,25 +655,35 @@ export function registerGitHandlers(ipcMain: IpcMain, services: AppServices): vo
         };
       }
 
-      // For multiple individual selections, we need to create a range from first to last
+      // For multiple individual selections, we need to combine diffs of each selected commit
       if (executionIds.length > 2) {
+        console.log('[get-combined-diff] Handling multiple selections (>2):', executionIds);
         const sortedIds = [...executionIds].sort((a, b) => a - b);
         const firstId = sortedIds[sortedIds.length - 1]; // Highest ID = oldest commit
         const lastId = sortedIds[0]; // Lowest ID = newest commit
+        console.log('[get-combined-diff] Sorted range:', { firstId, lastId, sortedIds });
 
         const fromIndex = firstId - 1;
         const toIndex = lastId - 1;
 
         if (fromIndex >= 0 && fromIndex < commits.length && toIndex >= 0 && toIndex < commits.length) {
-          const fromCommit = commits[fromIndex]; // Oldest selected
-          const toCommit = commits[toIndex]; // Newest selected
+          console.log('[get-combined-diff] Getting individual diffs for selected commits');
 
-          const diff = await gitDiffManager.captureCommitDiff(
-            session.worktreePath,
-            fromCommit.hash,
-            toCommit.hash
-          );
-          return { success: true, data: diff };
+          // Get individual diffs and combine them
+          const diffs: GitDiffResult[] = [];
+
+          // Get diff for each selected commit (from oldest to newest)
+          for (let i = fromIndex; i >= toIndex; i--) {
+            const commit = commits[i];
+            console.log('[get-combined-diff] Getting diff for commit:', commit.hash);
+            const commitDiff = gitDiffManager.getCommitDiff(session.worktreePath, commit.hash);
+            diffs.push(commitDiff);
+          }
+
+          // Combine the diffs
+          const combined = gitDiffManager.combineDiffs(diffs, session.worktreePath);
+          console.log('[get-combined-diff] Combined diff stats:', combined.stats);
+          return { success: true, data: combined };
         }
       }
 

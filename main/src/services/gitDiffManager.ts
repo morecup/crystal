@@ -71,17 +71,21 @@ export class GitDiffManager {
   async captureCommitDiff(worktreePath: string, fromCommit: string, toCommit?: string): Promise<GitDiffResult> {
     try {
       const to = toCommit || 'HEAD';
+      console.log(`[GitDiffManager] captureCommitDiff: from=${fromCommit} to=${to} in ${worktreePath}`);
       this.logger?.verbose(`Capturing git diff in ${worktreePath} from ${fromCommit} to ${to}`);
-      
+
       // Get diff between commits
       const diff = this.getGitCommitDiff(worktreePath, fromCommit, to);
-      
+      console.log(`[GitDiffManager] Diff length: ${diff.length} chars`);
+
       // Get changed files between commits
       const changedFiles = this.getChangedFilesBetweenCommits(worktreePath, fromCommit, to);
-      
+      console.log(`[GitDiffManager] Changed files:`, changedFiles);
+
       // Get diff stats between commits
       const stats = this.getCommitDiffStats(worktreePath, fromCommit, to);
-      
+      console.log(`[GitDiffManager] Stats:`, stats);
+
       return {
         diff,
         stats,
@@ -310,23 +314,30 @@ export class GitDiffManager {
 
   /**
    * Combine multiple diffs into a single diff
+   * Simply concatenates the diff texts and aggregates stats
    */
-  combineDiffs(diffs: GitDiffResult[]): GitDiffResult {
+  combineDiffs(diffs: GitDiffResult[], worktreePath?: string): GitDiffResult {
+    console.log('[GitDiffManager] combineDiffs: combining', diffs.length, 'diffs');
+
+    // Simple concatenation of diff texts
     const combinedDiff = diffs.map(d => d.diff).join('\n\n');
-    
+    console.log('[GitDiffManager] Combined diff length:', combinedDiff.length);
+
     // Aggregate stats
     const stats: GitDiffStats = {
       additions: diffs.reduce((sum, d) => sum + d.stats.additions, 0),
       deletions: diffs.reduce((sum, d) => sum + d.stats.deletions, 0),
       filesChanged: 0 // Will be calculated from unique files
     };
-    
+
     // Get unique changed files
     const allFiles = new Set<string>();
     diffs.forEach(d => d.changedFiles.forEach(f => allFiles.add(f)));
     const changedFiles = Array.from(allFiles);
     stats.filesChanged = changedFiles.length;
-    
+
+    console.log('[GitDiffManager] Combined stats:', stats);
+
     return {
       diff: combinedDiff,
       stats,
