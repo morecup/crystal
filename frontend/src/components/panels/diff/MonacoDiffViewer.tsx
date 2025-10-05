@@ -183,7 +183,8 @@ export const MonacoDiffViewer: React.FC<MonacoDiffViewerProps> = ({
           readOnly: isReadOnly,
           renderSideBySide: viewType === 'split',
           minimap: { enabled: false },
-          scrollBeyondLastLine: true,
+          scrollBeyondLastLine: false,
+          padding: { bottom: 100 },
           automaticLayout: true,
           fontSize: 13,
           lineNumbers: 'on',
@@ -257,7 +258,12 @@ export const MonacoDiffViewer: React.FC<MonacoDiffViewerProps> = ({
     if (!m || !editor) return;
     // Update theme and options
     m.editor.setTheme(isDarkMode ? 'vs-dark' : 'vs');
-    editor.updateOptions({ readOnly: isReadOnly, renderSideBySide: viewType === 'split', scrollBeyondLastLine: true });
+    editor.updateOptions({
+      readOnly: isReadOnly,
+      renderSideBySide: viewType === 'split',
+      scrollBeyondLastLine: false,
+      padding: { bottom: 100 }
+    });
 
     // Programmatic update of model contents
     isProgrammaticUpdateRef.current = true;
