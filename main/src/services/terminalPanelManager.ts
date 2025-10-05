@@ -105,9 +105,17 @@ export class TerminalPanelManager {
       const wslRepo = this.toWslPath(cwd);
       const qName = this.bashSingleQuote(sessionName);
       const qRepo = this.bashSingleQuote(wslRepo);
-      const bashCmd = `tmux new-session -As ${qName} -c ${qRepo}`;
+      // 仅为当前会话启用 tmux 鼠标模式并配置鼠标拖动选择后自动复制
+      // - set-option (without -g): 仅影响当前会话,不修改全局配置
+      // - mouse on: 启用鼠标支持
+      // - 鼠标拖动进入 copy-mode 并选择文本
+      // - 释放鼠标时自动复制到系统剪贴板(使用 xargs 防止空内容清空剪贴板)
+      const bashCmd = `tmux new-session -As ${qName} -c ${qRepo} \\; \\
+        set-option mouse on \\; \\
+        bind-key -T copy-mode-vi MouseDragEnd1Pane send-keys -X copy-pipe-and-cancel "xargs -0 -I {} clip.exe <<<{}" \\; \\
+        bind-key -T copy-mode MouseDragEnd1Pane send-keys -X copy-pipe-and-cancel "xargs -0 -I {} clip.exe <<<{}"`;
       spawnArgs = ['-e', 'bash', '-lc', bashCmd];
-      console.log('[TerminalPanelManager] Spawning WSL tmux session:', bashCmd);
+      console.log('[TerminalPanelManager] Spawning WSL tmux session with session-specific mouse copy support');
     }
 
     const ptyProcess = pty.spawn(shellInfo.path, spawnArgs || [], {
