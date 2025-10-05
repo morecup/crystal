@@ -229,23 +229,30 @@ export function registerGitHandlers(ipcMain: IpcMain, services: AppServices): vo
       if (hasUncommittedChanges) {
         // Get stats for uncommitted changes
         const uncommittedDiff = await gitDiffManager.captureWorkingDirectoryDiff(session.worktreePath);
-        
-        // Add uncommitted changes as execution with id 0
-        executions.unshift({
-          id: 0,
-          session_id: sessionId,
-          execution_sequence: 0,
-          after_commit_hash: 'UNCOMMITTED',
-          commit_message: 'Uncommitted changes',
-          timestamp: new Date().toISOString(),
-          stats_additions: uncommittedDiff.stats.additions,
-          stats_deletions: uncommittedDiff.stats.deletions,
-          stats_files_changed: uncommittedDiff.stats.filesChanged,
-          author: 'You',
-          comparison_branch: comparisonBranch,
-          history_source: historySource,
-          history_limit_reached: limitReached
-        });
+
+        // 额外验证：只有在确实有文件变更或增删时才显示未提交更改
+        const hasRealChanges = uncommittedDiff.stats.filesChanged > 0 ||
+                               uncommittedDiff.stats.additions > 0 ||
+                               uncommittedDiff.stats.deletions > 0;
+
+        if (hasRealChanges) {
+          // Add uncommitted changes as execution with id 0
+          executions.unshift({
+            id: 0,
+            session_id: sessionId,
+            execution_sequence: 0,
+            after_commit_hash: 'UNCOMMITTED',
+            commit_message: 'Uncommitted changes',
+            timestamp: new Date().toISOString(),
+            stats_additions: uncommittedDiff.stats.additions,
+            stats_deletions: uncommittedDiff.stats.deletions,
+            stats_files_changed: uncommittedDiff.stats.filesChanged,
+            author: 'You',
+            comparison_branch: comparisonBranch,
+            history_source: historySource,
+            history_limit_reached: limitReached
+          });
+        }
       }
 
       return { success: true, data: executions };
