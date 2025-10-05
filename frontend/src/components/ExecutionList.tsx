@@ -188,7 +188,7 @@ const ExecutionList: React.FC<ExecutionListProps> = memo(({
             <div
               key={execution.id}
               className={`
-                relative flex items-center p-4 border-b border-border-secondary cursor-pointer hover:bg-bg-hover transition-colors
+                relative flex items-center p-4 border-b border-border-secondary cursor-pointer hover:bg-bg-hover transition-colors select-none
                 ${isSelected ? 'bg-bg-accent border-l-4 border-l-interactive' : ''}
                 ${isUncommitted ? 'bg-status-warning/20' : ''}
               `}
