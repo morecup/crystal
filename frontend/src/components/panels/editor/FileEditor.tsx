@@ -818,6 +818,27 @@ export function FileEditor({
     }
   }, [initialFilePath, selectedFile, loadFile]);
 
+  // 监听 git restore 事件，重新加载当前文件以同步磁盘状态
+  useEffect(() => {
+    const handleGitRestore = (event: Event) => {
+      const customEvent = event as CustomEvent<{ sessionId: string }>;
+      if (customEvent.detail.sessionId === sessionId && selectedFile) {
+        console.log('[FileEditor] Git restore detected, canceling autoSave and reloading file:', selectedFile.path);
+
+        // 取消pending的autoSave，防止将旧内容写回
+        autoSave.cancel?.();
+
+        // 重新加载文件，同步restore后的磁盘状态
+        loadFile(selectedFile);
+      }
+    };
+
+    window.addEventListener('git-restore-completed', handleGitRestore);
+    return () => {
+      window.removeEventListener('git-restore-completed', handleGitRestore);
+    };
+  }, [sessionId, selectedFile, loadFile, autoSave]);
+
   // Memoize the tree state change handler to prevent infinite loops
   const handleTreeStateChange = useCallback((treeState: { expandedDirs: string[]; searchQuery: string; showSearch: boolean }) => {
     console.log('[FileEditor] handleTreeStateChange called with:', treeState);

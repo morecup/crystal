@@ -498,6 +498,11 @@ const CombinedDiffView: React.FC<CombinedDiffViewProps> = memo(({
           setCombinedDiff(diffResponse.data);
         }
       }
+
+      // 通知 Editor panel 文件已被restore，需要重新加载
+      window.dispatchEvent(new CustomEvent('git-restore-completed', {
+        detail: { sessionId }
+      }));
     } catch (err) {
       console.error('Error restoring changes:', err);
       alert(`Failed to restore changes: ${err instanceof Error ? err.message : 'Unknown error'}`);
