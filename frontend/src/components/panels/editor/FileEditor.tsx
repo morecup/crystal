@@ -833,25 +833,8 @@ export function FileEditor({
     }
   }, [onStateChange]);
   
-  // Cleanup effect for Monaco editor models
-  useEffect(() => {
-    return () => {
-      // Cleanup Monaco editor models when component unmounts or file changes
-      try {
-        if (editorRef.current && typeof editorRef.current === 'object' && editorRef.current !== null && 'getModel' in editorRef.current) {
-          const editor = editorRef.current as { getModel: () => unknown, dispose?: () => void };
-          const model = editor.getModel();
-          if (model && typeof model === 'object' && model !== null && 'dispose' in model) {
-            const typedModel = model as { dispose: () => void };
-            console.log('[FileEditor] Disposing Monaco model');
-            typedModel.dispose();
-          }
-        }
-      } catch (error) {
-        console.warn('[FileEditor] Error during Monaco cleanup:', error);
-      }
-    };
-  }, [selectedFile?.path]); // Run cleanup when file changes
+  // 交由 @monaco-editor/react 管理模型生命周期，避免偶发“不可编辑/模型已释放”问题
+  // 移除手动 dispose 模型的逻辑
 
   return (
     <div className="h-full flex">
@@ -966,6 +949,7 @@ export function FileEditor({
                     onChange={handleEditorChange}
                     onMount={handleEditorMount}
                     options={{
+                      readOnly: false,
                       minimap: { enabled: true },
                       fontSize: 14,
                       wordWrap: 'on',

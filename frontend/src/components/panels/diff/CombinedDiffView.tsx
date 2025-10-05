@@ -241,36 +241,16 @@ const CombinedDiffView: React.FC<CombinedDiffViewProps> = memo(({
     // 参数用于满足回调签名，避免未使用告警
     void filePath;
     
-    // Refresh executions list to show uncommitted changes
-    const refreshExecutions = async () => {
+    // 保存后不立即刷新 diff，避免界面闪动；面板手动刷新或切换时再更新
+    // 如需更新统计，仅刷新 executions（不会重建 Diff 视图）
+    (async () => {
       try {
-        console.log('Refreshing executions after file save');
         const response = await API.sessions.getExecutions(sessionId);
-        if (response.success) {
-          setExecutions(response.data);
-        }
+        if (response.success) setExecutions(response.data);
       } catch (err) {
         console.error('Failed to refresh executions:', err);
       }
-    };
-    refreshExecutions();
-    
-    // Refresh only uncommitted changes when a file is saved
-    if (selectedExecutions.includes(0)) {
-      // Reload the uncommitted changes diff
-      const loadUncommittedDiff = async () => {
-        try {
-          console.log('Refreshing uncommitted changes after file save');
-          const response = await API.sessions.getCombinedDiff(sessionId, [0]);
-          if (response.success) {
-            setCombinedDiff(response.data);
-          }
-        } catch (err) {
-          console.error('Failed to refresh uncommitted changes:', err);
-        }
-      };
-      loadUncommittedDiff();
-    }
+    })();
   }, [sessionId, selectedExecutions]);
 
   const handleCommit = useCallback(async (message: string) => {
@@ -638,7 +618,7 @@ const CombinedDiffView: React.FC<CombinedDiffViewProps> = memo(({
         )}
 
         {/* Diff preview */}
-        <div className={`${isFullscreen ? 'w-full' : 'flex-1'} overflow-auto bg-bg-primary min-w-0 flex flex-col`}>
+        <div className={`${isFullscreen ? 'w-full' : 'flex-1'} overflow-hidden bg-bg-primary min-w-0 flex flex-col`}>
           {isGitOperationRunning ? (
             <div className="flex flex-col items-center justify-center h-full p-8">
               <svg className="animate-spin h-12 w-12 text-interactive mb-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">

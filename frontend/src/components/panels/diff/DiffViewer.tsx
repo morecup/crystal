@@ -202,8 +202,11 @@ const DiffViewer = memo(forwardRef<DiffViewerHandle, DiffViewerProps>(({ diff, s
     const savedShowFullContent = localStorage.getItem('diffShowFullContent');
     if (savedShowFullContent === 'true' || savedShowFullContent === 'false') {
       setShowFullContent(savedShowFullContent === 'true');
+    } else {
+      // 默认在“未提交变更”场景下展示完整文件，从而允许编辑
+      setShowFullContent(!afterCommitHash);
     }
-  }, []);
+  }, [afterCommitHash]);
 
   const handleViewTypeChange = (type: 'split' | 'inline') => {
     setViewType(type);
@@ -422,16 +425,50 @@ const DiffViewer = memo(forwardRef<DiffViewerHandle, DiffViewerProps>(({ diff, s
     loadFullFileContents();
   }, [files, showFullContent, sessionId, mainBranch, parallelLimit, beforeCommitHash, afterCommitHash]);
 
+  // 记住当前激活文件，文件列表变化时尽量保持不变，避免界面闪烁
+  const activePathRef = useRef<string | null>(null);
+
   useEffect(() => {
-    // 默认只展开第一个文件，减少同时挂载编辑器的概率
-    if (files.length > 0) {
-      const firstKey = `${files[0]?.path}-0`;
-      setExpandedFiles(new Set(firstKey ? [firstKey] : []));
-      setActiveIndex(0);
-    } else {
+    if (activeIndex !== null && files[activeIndex]) {
+      activePathRef.current = files[activeIndex].path;
+    }
+  }, [activeIndex, files]);
+
+  useEffect(() => {
+    if (files.length === 0) {
       setExpandedFiles(new Set());
       setActiveIndex(null);
+      activePathRef.current = null;
+      return;
     }
+
+    // 初次加载或没有激活项时，默认选择第一个
+    if (activeIndex === null) {
+      const key = `${files[0].path}-0`;
+      setExpandedFiles(new Set([key]));
+      setActiveIndex(0);
+      activePathRef.current = files[0].path;
+      return;
+    }
+
+    // 尝试在新列表中找到相同路径
+    const prevPath = activePathRef.current;
+    if (prevPath) {
+      const idx = files.findIndex(f => f.path === prevPath);
+      if (idx !== -1) {
+        const key = `${files[idx].path}-${idx}`;
+        setExpandedFiles(new Set([key]));
+        setActiveIndex(idx);
+        return;
+      }
+    }
+
+    // 否则保持索引不变（若越界则选末尾）
+    const nextIndex = Math.min(activeIndex, files.length - 1);
+    const key = `${files[nextIndex].path}-${nextIndex}`;
+    setExpandedFiles(new Set([key]));
+    setActiveIndex(nextIndex);
+    activePathRef.current = files[nextIndex].path;
   }, [files]);
 
   const toggleFile = (fileKey: string, index: number) => {
@@ -555,8 +592,8 @@ const DiffViewer = memo(forwardRef<DiffViewerHandle, DiffViewerProps>(({ diff, s
           </div>
         </div>
         
-        {/* File List */}
-        <div ref={scrollContainerRef} className="flex-1 overflow-auto">
+        {/* File List (limit height to avoid outer scrolling) */}
+        <div ref={scrollContainerRef} className="flex-none max-h-64 overflow-auto">
           {filesToRender.map((file, index) => {
             // Skip files with invalid paths
             if (!file.path) {
@@ -674,6 +711,10 @@ const DiffViewer = memo(forwardRef<DiffViewerHandle, DiffViewerProps>(({ diff, s
                 </p>
               </div>
             ) : null}
+            {(() => {
+              const activeFile = filesToRender[activeIndex];
+              const canEdit = !afterCommitHash && showFullContent && !loadErrors[activeFile.path];
+              return (
             <MonacoDiffViewer
               key={`${filesToRender[activeIndex].path}-${activeIndex}-${showFullContent ? 'full' : 'diff'}`}
               file={filesToRender[activeIndex]}
@@ -681,8 +722,10 @@ const DiffViewer = memo(forwardRef<DiffViewerHandle, DiffViewerProps>(({ diff, s
               isDarkMode={isDarkMode}
               viewType={viewType}
               onSave={() => handleFileSave(filesToRender[activeIndex].path)}
-              isReadOnly={!showFullContent || !!loadErrors[filesToRender[activeIndex].path]}
-            />
+                isReadOnly={!canEdit}
+              />
+              );
+            })()}
           </div>
         )}
     </div>

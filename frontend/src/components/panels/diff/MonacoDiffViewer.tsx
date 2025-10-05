@@ -183,7 +183,7 @@ export const MonacoDiffViewer: React.FC<MonacoDiffViewerProps> = ({
           readOnly: isReadOnly,
           renderSideBySide: viewType === 'split',
           minimap: { enabled: false },
-          scrollBeyondLastLine: false,
+          scrollBeyondLastLine: true,
           automaticLayout: true,
           fontSize: 13,
           lineNumbers: 'on',
@@ -257,7 +257,7 @@ export const MonacoDiffViewer: React.FC<MonacoDiffViewerProps> = ({
     if (!m || !editor) return;
     // Update theme and options
     m.editor.setTheme(isDarkMode ? 'vs-dark' : 'vs');
-    editor.updateOptions({ readOnly: isReadOnly, renderSideBySide: viewType === 'split' });
+    editor.updateOptions({ readOnly: isReadOnly, renderSideBySide: viewType === 'split', scrollBeyondLastLine: true });
 
     // Programmatic update of model contents
     isProgrammaticUpdateRef.current = true;
@@ -271,7 +271,10 @@ export const MonacoDiffViewer: React.FC<MonacoDiffViewerProps> = ({
     setCurrentContent(file.newValue || '');
     setTimeout(() => {
       isProgrammaticUpdateRef.current = false;
-      if (!isDisposingRef.current) calculateEditorHeight();
+      if (!isDisposingRef.current) {
+        calculateEditorHeight();
+        try { editor.layout(); } catch {}
+      }
     }, 100);
   }, [file.path, file.oldValue, file.newValue, isDarkMode, isReadOnly, viewType]);
 
@@ -433,30 +436,8 @@ export const MonacoDiffViewer: React.FC<MonacoDiffViewerProps> = ({
 
   // Calculate height based on content
   const calculateEditorHeight = useCallback(() => {
-    if (!editorRef.current) return;
-    
-    try {
-      const originalEditor = editorRef.current.getOriginalEditor();
-      const modifiedEditor = editorRef.current.getModifiedEditor();
-      
-      const originalModel = originalEditor.getModel();
-      const modifiedModel = modifiedEditor.getModel();
-      
-      const lineHeight = 19; // Default line height for Monaco editor
-      const originalLines = originalModel ? originalModel.getLineCount() : 0;
-      const modifiedLines = modifiedModel ? modifiedModel.getLineCount() : 0;
-      
-      // Use the maximum line count between original and modified
-      const maxLines = Math.max(originalLines, modifiedLines);
-      
-      // Calculate height with padding for diff headers and UI elements
-      // Line height + padding for headers (approx 3 lines worth)
-      const calculatedHeight = Math.max(400, (maxLines * lineHeight) + (lineHeight * 3));
-      
-      setEditorHeight(calculatedHeight);
-    } catch (error) {
-      // Error calculating editor height - debug logging removed
-    }
+    // 固定高度，启用 Monaco 内部滚动条（鼠标滚轮在编辑器内生效）
+    setEditorHeight(600);
   }, []);
 
   // Themes can be defined via monacoRef when needed
