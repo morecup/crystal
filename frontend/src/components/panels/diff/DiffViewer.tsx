@@ -181,10 +181,11 @@ export interface DiffViewerHandle {
   scrollToFile: (index: number) => void;
 }
 
-const DiffViewer = memo(forwardRef<DiffViewerHandle, DiffViewerProps>(({ diff, sessionId, className = '', onFileSave, isAllCommitsSelected = true, mainBranch = 'main' }, ref) => {
+const DiffViewer = memo(forwardRef<DiffViewerHandle, DiffViewerProps>(({ diff, sessionId, className = '', onFileSave, mainBranch = 'main' }, ref) => {
   const { theme } = useTheme();
   const { config } = useConfigStore();
   const [viewType, setViewType] = useState<'split' | 'inline'>('split');
+  const [showFullContent, setShowFullContent] = useState(false);
   const [expandedFiles, setExpandedFiles] = useState<Set<string>>(new Set());
   const [filesWithFullContent, setFilesWithFullContent] = useState<FileDiff[]>([]);
   const [loadingFullContent, setLoadingFullContent] = useState(false);
@@ -196,11 +197,21 @@ const DiffViewer = memo(forwardRef<DiffViewerHandle, DiffViewerProps>(({ diff, s
     if (savedViewType === 'split' || savedViewType === 'inline') {
       setViewType(savedViewType);
     }
+
+    const savedShowFullContent = localStorage.getItem('diffShowFullContent');
+    if (savedShowFullContent === 'true' || savedShowFullContent === 'false') {
+      setShowFullContent(savedShowFullContent === 'true');
+    }
   }, []);
 
   const handleViewTypeChange = (type: 'split' | 'inline') => {
     setViewType(type);
     localStorage.setItem('diffViewType', type);
+  };
+
+  const handleShowFullContentChange = (show: boolean) => {
+    setShowFullContent(show);
+    localStorage.setItem('diffShowFullContent', String(show));
   };
 
   const maxBytes = useMemo(() => {
@@ -262,14 +273,15 @@ const DiffViewer = memo(forwardRef<DiffViewerHandle, DiffViewerProps>(({ diff, s
   // Load full file contents when in edit mode
   useEffect(() => {
     const loadFullFileContents = async () => {
-      if (!isAllCommitsSelected || !sessionId || files.length === 0) {
+      // 只有在开启"显示完整文件"时才加载完整内容
+      if (!showFullContent || !sessionId || files.length === 0) {
         setFilesWithFullContent(files);
         return;
       }
 
       setLoadingFullContent(true);
       setLoadErrors({}); // Clear previous errors
-      console.log('Loading full file contents for editing...');
+      console.log('Loading full file contents for complete file view...');
 
       try {
         const errors: Record<string, string> = {};
@@ -296,7 +308,7 @@ const DiffViewer = memo(forwardRef<DiffViewerHandle, DiffViewerProps>(({ diff, s
 
               if (result.success && result.content !== undefined) {
                 console.log(`Loaded full content for ${file.path}: ${result.content.length} characters`);
-                
+
                 // For added files, oldValue should remain empty
                 if (file.type === 'added') {
                   return {
@@ -305,18 +317,18 @@ const DiffViewer = memo(forwardRef<DiffViewerHandle, DiffViewerProps>(({ diff, s
                     originalDiffNewValue: file.newValue
                   };
                 }
-                
+
                 // 对比基线统一使用当前分支最新提交（HEAD），避免当选择全部提交时使用创建时的主分支（如 dev）导致内容与统计不一致
-                // 这样“增减行数”和“具体差异内容”都与当前分支保持一致
+                // 这样"增减行数"和"具体差异内容"都与当前分支保持一致
                 const baseRevision = 'HEAD';
-                
+
                 try {
                   const headResult = await window.electronAPI.invoke('file:readAtRevision', {
                     sessionId,
                     filePath: file.path,
                     revision: baseRevision
                   });
-                  
+
                   if (headResult.success && headResult.content !== undefined) {
                     console.log(`Loaded ${baseRevision} content for ${file.path}: ${headResult.content.length} characters`);
                     return {
@@ -382,7 +394,7 @@ const DiffViewer = memo(forwardRef<DiffViewerHandle, DiffViewerProps>(({ diff, s
     };
 
     loadFullFileContents();
-  }, [files, isAllCommitsSelected, sessionId, mainBranch]);
+  }, [files, showFullContent, sessionId, mainBranch, parallelLimit]);
 
   useEffect(() => {
     // Expand all files by default
@@ -437,12 +449,12 @@ const DiffViewer = memo(forwardRef<DiffViewerHandle, DiffViewerProps>(({ diff, s
   }
 
   const isDarkMode = theme === 'dark';
-  
+
   // Show loading state while fetching full content
-  if (loadingFullContent && isAllCommitsSelected) {
+  if (loadingFullContent && showFullContent) {
     return (
       <div className={`flex items-center justify-center p-8 ${className}`}>
-        <div className="text-text-secondary">Loading file contents for editing...</div>
+        <div className="text-text-secondary">加载完整文件内容中...</div>
       </div>
     );
   }
@@ -461,6 +473,32 @@ const DiffViewer = memo(forwardRef<DiffViewerHandle, DiffViewerProps>(({ diff, s
           </div>
 
           <div className="flex items-center space-x-4">
+            {/* Show Full Content Toggle */}
+            <div className="inline-flex rounded-lg border border-border-primary bg-surface-primary">
+              <button
+                onClick={() => handleShowFullContentChange(false)}
+                className={`px-3 py-1 text-sm font-medium rounded-l-lg transition-colors ${
+                  !showFullContent
+                    ? 'bg-interactive text-white'
+                    : 'text-text-secondary hover:bg-surface-hover'
+                }`}
+                title="显示差异片段"
+              >
+                差异
+              </button>
+              <button
+                onClick={() => handleShowFullContentChange(true)}
+                className={`px-3 py-1 text-sm font-medium rounded-r-lg transition-colors ${
+                  showFullContent
+                    ? 'bg-interactive text-white'
+                    : 'text-text-secondary hover:bg-surface-hover'
+                }`}
+                title="显示完整文件内容"
+              >
+                完整文件
+              </button>
+            </div>
+
             {/* Split/Unified Toggle */}
             <div className="inline-flex rounded-lg border border-border-primary bg-surface-primary">
               <button
@@ -577,7 +615,7 @@ const DiffViewer = memo(forwardRef<DiffViewerHandle, DiffViewerProps>(({ diff, s
                       </div>
                     ) : (
                       <>
-                        {loadErrors[file.path] && isAllCommitsSelected ? (
+                        {loadErrors[file.path] && showFullContent ? (
                           <div className="p-4 bg-status-error/10 border-b border-status-error/30">
                             <div className="flex items-center gap-2 text-status-error">
                               <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -594,13 +632,13 @@ const DiffViewer = memo(forwardRef<DiffViewerHandle, DiffViewerProps>(({ diff, s
                           </div>
                         ) : null}
                         <MonacoDiffViewer
-                          key={`${file.path}-${index}`}
+                          key={`${file.path}-${index}-${showFullContent ? 'full' : 'diff'}`}
                           file={file}
                           sessionId={sessionId || ''}
                           isDarkMode={isDarkMode}
                           viewType={viewType}
                           onSave={() => handleFileSave(file.path)}
-                          isReadOnly={!isAllCommitsSelected || !!loadErrors[file.path]}
+                          isReadOnly={!showFullContent || !!loadErrors[file.path]}
                         />
                       </>
                     )}

@@ -51,6 +51,7 @@ export const MonacoDiffViewer: React.FC<MonacoDiffViewerProps> = ({
   const [initError, setInitError] = useState<string | null>(null);
   const [configuredVsPath, setConfiguredVsPath] = useState<string | null>(null);
   const [editorKey] = useState<number>(0);
+  const isDisposingRef = useRef<boolean>(false);
   
   // Check if this is a markdown file
   const isMarkdownFile = useMemo(() => {
@@ -392,43 +393,44 @@ export const MonacoDiffViewer: React.FC<MonacoDiffViewerProps> = ({
   const handleEditorDidMount: DiffEditorProps['onMount'] = useCallback((editor: MonacoDiffEditor, monacoInstance: typeof monaco) => {
     try {
       editorRef.current = editor;
-      
+      isDisposingRef.current = false;
+
       // Get the modified editor (right side)
       const modifiedEditor = editor.getModifiedEditor();
-      
+
       // Store disposables for cleanup
       const disposables: IDisposable[] = [];
-      
+
       // Mark editor as ready
       setIsEditorReady(true);
-      
+
       // Calculate initial height
       setTimeout(() => {
         calculateEditorHeight();
       }, 100);
-    
+
     // Track changes and auto-save (only if not read-only)
     if (!isReadOnly) {
       const changeDisposable = modifiedEditor.onDidChangeModelContent(() => {
-        // Check if editor and model still exist
-        if (!editorRef.current || !modifiedEditor.getModel()) {
+        // Prevent operations if editor is being disposed
+        if (isDisposingRef.current || !editorRef.current || !modifiedEditor.getModel()) {
           return;
         }
-        
+
         try {
           const newContent = modifiedEditor.getValue();
           setCurrentContent(newContent);
-          
+
           // Recalculate height when content changes
           setTimeout(() => {
             calculateEditorHeight();
           }, 50);
-          
+
           // Skip auto-save if this is a programmatic update (e.g., switching commits)
           if (isProgrammaticUpdateRef.current) {
             return;
           }
-          
+
           // Show pending status immediately
           if (newContent !== file.newValue) {
             setSaveStatus('pending');
@@ -451,11 +453,11 @@ export const MonacoDiffViewer: React.FC<MonacoDiffViewerProps> = ({
       const commandDisposable = modifiedEditor.addCommand(
         monacoInstance.KeyMod.CtrlCmd | monacoInstance.KeyCode.KeyS,
         () => {
-          // Check if editor and model still exist
-          if (!editorRef.current || !modifiedEditor.getModel()) {
+          // Prevent operations if editor is being disposed
+          if (isDisposingRef.current || !editorRef.current || !modifiedEditor.getModel()) {
             return;
           }
-          
+
           try {
             const content = modifiedEditor.getValue();
             // Cancel any pending debounced save
@@ -470,7 +472,7 @@ export const MonacoDiffViewer: React.FC<MonacoDiffViewerProps> = ({
         disposables.push({ dispose: () => commandDisposable });
       }
     }
-    
+
     // Store disposables for cleanup
     (editor as MonacoDiffEditor & { __disposables?: IDisposable[] }).__disposables = disposables;
     } catch (error) {
@@ -488,18 +490,18 @@ export const MonacoDiffViewer: React.FC<MonacoDiffViewerProps> = ({
   useEffect(() => {
     // Set flag to prevent auto-save during programmatic update
     isProgrammaticUpdateRef.current = true;
-    
+
     setCurrentContent(file.newValue || '');
     setSaveStatus('idle');
     setSaveError(null);
-    
+
     // Update the editor content if it exists, is ready, and hasn't been disposed
-    if (editorRef.current && isEditorReady) {
+    if (editorRef.current && isEditorReady && !isDisposingRef.current) {
       try {
         const modifiedEditor = editorRef.current.getModifiedEditor();
         if (modifiedEditor && modifiedEditor.getModel()) {
           const currentValue = modifiedEditor.getValue();
-          
+
           // Only update if content is different
           if (currentValue !== (file.newValue || '')) {
             modifiedEditor.setValue(file.newValue || '');
@@ -510,21 +512,23 @@ export const MonacoDiffViewer: React.FC<MonacoDiffViewerProps> = ({
         console.debug('Editor update skipped, might be disposed:', error);
       }
     }
-    
+
     // Reset flag after a small delay to ensure the change event has fired
     const timeoutId = setTimeout(() => {
       isProgrammaticUpdateRef.current = false;
       // Recalculate height after content update
-      calculateEditorHeight();
+      if (!isDisposingRef.current) {
+        calculateEditorHeight();
+      }
     }, 100);
-    
+
     // Cleanup timeout on effect cleanup
     return () => clearTimeout(timeoutId);
   }, [file.path, file.newValue, isEditorReady, calculateEditorHeight]);
 
   // Handle readOnly prop changes dynamically
   useEffect(() => {
-    if (editorRef.current && isEditorReady) {
+    if (editorRef.current && isEditorReady && !isDisposingRef.current) {
       try {
         const modifiedEditor = editorRef.current.getModifiedEditor();
         if (modifiedEditor) {
@@ -590,14 +594,24 @@ export const MonacoDiffViewer: React.FC<MonacoDiffViewerProps> = ({
   // Cleanup on unmount or when key props change
   useEffect(() => {
     return () => {
+      // Set disposing flag to prevent any operations during cleanup
+      isDisposingRef.current = true;
+
       // Flush any pending saves before unmount
-      debouncedSaveRef.current?.flush();
-      
+      if (debouncedSaveRef.current?.flush) {
+        try {
+          debouncedSaveRef.current.flush();
+        } catch (error) {
+          console.debug('Error flushing debounced save:', error);
+        }
+      }
+
       // Clear timeout
       if (savedTimeoutRef.current) {
         clearTimeout(savedTimeoutRef.current);
+        savedTimeoutRef.current = null;
       }
-      
+
       // Dispose of the editor to prevent memory leaks and errors
       if (editorRef.current) {
         try {
@@ -613,28 +627,63 @@ export const MonacoDiffViewer: React.FC<MonacoDiffViewerProps> = ({
             });
             editor.__disposables = [];
           }
-          
+
           // Get both editors to ensure proper cleanup
-          const originalEditor = editorRef.current.getOriginalEditor();
-          const modifiedEditor = editorRef.current.getModifiedEditor();
-          
-          // Clear models before disposing to prevent the TextModel disposal error
-          if (originalEditor && originalEditor.getModel()) {
-            originalEditor.setModel(null);
+          try {
+            const originalEditor = editorRef.current.getOriginalEditor();
+            const modifiedEditor = editorRef.current.getModifiedEditor();
+
+            // Clear models before disposing to prevent the TextModel disposal error
+            if (originalEditor) {
+              try {
+                const model = originalEditor.getModel();
+                if (model) {
+                  originalEditor.setModel(null);
+                  // Don't dispose the model as Monaco will handle it
+                }
+              } catch (error) {
+                console.debug('Error clearing original editor model:', error);
+              }
+            }
+
+            if (modifiedEditor) {
+              try {
+                const model = modifiedEditor.getModel();
+                if (model) {
+                  modifiedEditor.setModel(null);
+                  // Don't dispose the model as Monaco will handle it
+                }
+              } catch (error) {
+                console.debug('Error clearing modified editor model:', error);
+              }
+            }
+          } catch (error) {
+            console.debug('Error accessing editor instances:', error);
           }
-          if (modifiedEditor && modifiedEditor.getModel()) {
-            modifiedEditor.setModel(null);
+
+          // Finally dispose of the diff editor itself
+          try {
+            editorRef.current.dispose();
+          } catch (error) {
+            console.debug('Error disposing diff editor:', error);
           }
-          
-          // Then dispose of the diff editor
-          editorRef.current.dispose();
+
           editorRef.current = null;
         } catch (error) {
           console.debug('Error during Monaco editor cleanup:', error);
         }
       }
+
+      // Reset state
+      setIsEditorReady(false);
+      setCanMountEditor(false);
+
+      // Small delay before resetting disposing flag to ensure cleanup completes
+      setTimeout(() => {
+        isDisposingRef.current = false;
+      }, 50);
     };
-  }, [file.path]); // Only cleanup when file path changes
+  }, []); // Empty deps - only cleanup on unmount
 
   const options = {
     readOnly: isReadOnly,
@@ -755,7 +804,7 @@ export const MonacoDiffViewer: React.FC<MonacoDiffViewerProps> = ({
           {isReadOnly ? (
             <div className="flex items-center gap-1 text-xs text-text-tertiary">
               <AlertCircle className="w-3 h-3" />
-              <span>Read-only (select all commits to edit)</span>
+              <span>只读 (开启"完整文件"以编辑)</span>
             </div>
           ) : saveStatus !== 'idle' && (
             <div className={`flex items-center gap-1 text-xs ${getSaveStatusColor()}`}>

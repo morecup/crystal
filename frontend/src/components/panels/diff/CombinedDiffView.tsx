@@ -664,33 +664,12 @@ const CombinedDiffView: React.FC<CombinedDiffViewProps> = memo(({
               <p>{error}</p>
             </div>
           ) : combinedDiff ? (
-            <DiffViewer 
+            <DiffViewer
               ref={diffViewerRef}
-              diff={combinedDiff.diff} 
-              sessionId={sessionId} 
-              className="h-full" 
+              diff={combinedDiff.diff}
+              sessionId={sessionId}
+              className="h-full"
               onFileSave={handleFileSave}
-              isAllCommitsSelected={(() => {
-                // Check if this is showing all commits
-                const commits = executions.filter(e => e.id !== 0);
-                if (commits.length === 0) return true; // No commits yet
-                
-                // If selectedExecutions is empty, it means "all"
-                if (selectedExecutions.length === 0) return true;
-                
-                // If it's a range selection [start, end], check if it covers all commits
-                if (selectedExecutions.length === 2) {
-                  const [start, end] = selectedExecutions;
-                  const minId = Math.min(start, end);
-                  const maxId = Math.max(start, end);
-                  const firstCommitId = commits[commits.length - 1].id;
-                  const lastCommitId = commits[0].id;
-                  return minId <= firstCommitId && maxId >= lastCommitId;
-                }
-                
-                // Otherwise, check if all commits are individually selected
-                return selectedExecutions.length === executions.length;
-              })()}
               mainBranch={mainBranch}
             />
           ) : executions.length === 0 ? (
