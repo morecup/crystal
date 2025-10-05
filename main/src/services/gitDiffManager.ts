@@ -33,7 +33,6 @@ export class GitDiffManager {
    */
   async captureWorkingDirectoryDiff(worktreePath: string): Promise<GitDiffResult> {
     try {
-      console.log(`captureWorkingDirectoryDiff called for: ${worktreePath}`);
       this.logger?.verbose(`Capturing git diff in ${worktreePath}`);
       
       // Get current commit hash
@@ -41,7 +40,6 @@ export class GitDiffManager {
       
       // Get diff of working directory vs HEAD
       const diff = this.getGitDiffString(worktreePath);
-      console.log(`Captured diff length: ${diff.length}`);
       
       // Get changed files
       const changedFiles = this.getChangedFiles(worktreePath);
@@ -50,7 +48,6 @@ export class GitDiffManager {
       const stats = this.getDiffStats(worktreePath);
       
       this.logger?.verbose(`Captured diff: ${stats.filesChanged} files, +${stats.additions} -${stats.deletions}`);
-      console.log(`Diff stats:`, stats);
       
       return {
         diff,
@@ -71,7 +68,6 @@ export class GitDiffManager {
   async captureCommitDiff(worktreePath: string, fromCommit: string, toCommit?: string): Promise<GitDiffResult> {
     try {
       const to = toCommit || 'HEAD';
-      console.log(`[GitDiffManager] captureCommitDiff: from=${fromCommit} to=${to} in ${worktreePath}`);
       this.logger?.verbose(`Capturing git diff in ${worktreePath} from ${fromCommit} to ${to}`);
 
       // Resolve refs (handles caret ^ on Windows cmd) to stable hashes first
@@ -80,15 +76,12 @@ export class GitDiffManager {
 
       // Get changed files between commits
       const changedFiles = this.getChangedFilesBetweenCommits(worktreePath, resolvedFrom, resolvedTo);
-      console.log(`[GitDiffManager] Changed files:`, changedFiles);
 
       // Get diff between commits
       const diff = this.getGitCommitDiff(worktreePath, resolvedFrom, resolvedTo);
-      console.log(`[GitDiffManager] Diff length: ${diff.length} chars`);
 
       // Get diff stats between commits
       const stats = this.getCommitDiffStats(worktreePath, resolvedFrom, resolvedTo);
-      console.log(`[GitDiffManager] Stats:`, stats);
 
       return {
         diff,
@@ -321,11 +314,8 @@ export class GitDiffManager {
    * Simply concatenates the diff texts and aggregates stats
    */
   combineDiffs(diffs: GitDiffResult[], worktreePath?: string): GitDiffResult {
-    console.log('[GitDiffManager] combineDiffs: combining', diffs.length, 'diffs');
-
     // Simple concatenation of diff texts
     const combinedDiff = diffs.map(d => d.diff).join('\n\n');
-    console.log('[GitDiffManager] Combined diff length:', combinedDiff.length);
 
     // Aggregate stats
     const stats: GitDiffStats = {
@@ -339,8 +329,6 @@ export class GitDiffManager {
     diffs.forEach(d => d.changedFiles.forEach(f => allFiles.add(f)));
     const changedFiles = Array.from(allFiles);
     stats.filesChanged = changedFiles.length;
-
-    console.log('[GitDiffManager] Combined stats:', stats);
 
     return {
       diff: combinedDiff,
@@ -411,13 +399,12 @@ export class GitDiffManager {
       try {
         execSync('git rev-parse --git-dir', { cwd: worktreePath, encoding: 'utf8' });
       } catch {
-        console.error(`Not a git repository: ${worktreePath}`);
+        this.logger?.warn(`Not a git repository: ${worktreePath}`);
         return '';
       }
 
       // Check git status to see what files have changes
-      const status = execSync('git status --porcelain', { cwd: worktreePath, encoding: 'utf8' });
-      console.log(`Git status in ${worktreePath}:`, status || '(no changes)');
+      execSync('git status --porcelain', { cwd: worktreePath, encoding: 'utf8' });
 
       // Get diff of both staged and unstaged changes against HEAD
       // Using 'git diff HEAD' to include both staged and unstaged changes
@@ -426,12 +413,10 @@ export class GitDiffManager {
         encoding: 'utf8',
         maxBuffer: 10 * 1024 * 1024 // 10MB buffer for large diffs
       });
-      console.log(`Git diff in ${worktreePath}: ${diff.length} characters`);
       
       // Get untracked files and create diff-like output for them
       const untrackedFiles = this.getUntrackedFiles(worktreePath);
       if (untrackedFiles.length > 0) {
-        console.log(`Found ${untrackedFiles.length} untracked files`);
         const untrackedDiff = this.createDiffForUntrackedFiles(worktreePath, untrackedFiles);
         if (untrackedDiff) {
           diff = diff ? diff + '\n' + untrackedDiff : untrackedDiff;
@@ -544,6 +529,44 @@ export class GitDiffManager {
     } catch (error) {
       this.logger?.warn(`Could not get commit diff stats in ${worktreePath}`);
       return { additions: 0, deletions: 0, filesChanged: 0 };
+    }
+  }
+
+  /**
+   * Capture diff from a specific commit to the current working tree (includes uncommitted changes).
+   */
+  async captureDiffFromCommitToWorkingTree(worktreePath: string, fromCommit: string): Promise<GitDiffResult> {
+    try {
+      const base = this.resolveRef(worktreePath, fromCommit);
+
+      const diff = execSync(`git diff ${base}`, {
+        cwd: worktreePath,
+        encoding: 'utf8',
+        maxBuffer: 50 * 1024 * 1024
+      });
+
+      const filesOut = execSync(`git diff --name-only ${base}`, {
+        cwd: worktreePath,
+        encoding: 'utf8'
+      });
+      const changedFiles = filesOut.trim().split('\n').filter(Boolean);
+
+      const statsOut = execSync(`git diff --stat ${base}`, {
+        cwd: worktreePath,
+        encoding: 'utf8'
+      });
+      const stats = this.parseDiffStats(statsOut);
+
+      return {
+        diff,
+        stats,
+        changedFiles,
+        beforeHash: base,
+        afterHash: 'UNCOMMITTED'
+      };
+    } catch (error) {
+      this.logger?.warn(`Could not get diff from commit to working tree in ${worktreePath}`);
+      return { diff: '', stats: { additions: 0, deletions: 0, filesChanged: 0 }, changedFiles: [] };
     }
   }
 

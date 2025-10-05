@@ -134,14 +134,26 @@ export const MonacoDiffViewer: React.FC<MonacoDiffViewerProps> = ({
   useEffect(() => {
     const onUnhandledRejection = (e: PromiseRejectionEvent) => {
       const msg = (e.reason && (e.reason.message || String(e.reason))) || 'Unknown error';
+      // 忽略 Monaco 在卸载时偶发的已释放服务报错（非致命）
+      if (msg.includes('AbstractContextKeyService has been disposed')) {
+        e.preventDefault?.();
+        return;
+      }
       if (msg.toLowerCase().includes('monaco') || msg.includes('loader.js')) {
         setInitError(`Monaco 初始化失败：${msg}`);
       }
     };
     const onError = (e: ErrorEvent) => {
       const src = `${e.filename || ''}`;
-      if (src.includes('/vs/') || (e.message || '').toLowerCase().includes('monaco')) {
-        setInitError(`Monaco 初始化失败：${e.message || 'Unknown error'}`);
+      const message = e.message || '';
+      // 忽略 Monaco 在右键菜单/上下文动作期间触发的已释放服务报错（非致命）
+      if (message.includes('AbstractContextKeyService has been disposed')) {
+        e.preventDefault?.();
+        e.stopImmediatePropagation?.();
+        return false;
+      }
+      if (src.includes('/vs/') || message.toLowerCase().includes('monaco')) {
+        setInitError(`Monaco 初始化失败：${message || 'Unknown error'}`);
       }
     };
     window.addEventListener('unhandledrejection', onUnhandledRejection);
@@ -612,65 +624,46 @@ export const MonacoDiffViewer: React.FC<MonacoDiffViewerProps> = ({
         savedTimeoutRef.current = null;
       }
 
-      // Dispose of the editor to prevent memory leaks and errors
+      // Dispose of the editor to prevent memory leaks and errors（延迟到下一帧，避免与 Monaco 内部上下文菜单竞争）
       if (editorRef.current) {
-        try {
-          // Dispose event handlers first
-          const editor = editorRef.current as MonacoDiffEditor & { __disposables?: IDisposable[] };
-          if (editor.__disposables) {
-            editor.__disposables.forEach((d: IDisposable) => {
-              try {
-                d.dispose();
-              } catch (error) {
-                console.debug('Error disposing event handler:', error);
-              }
-            });
-            editor.__disposables = [];
-          }
-
-          // Get both editors to ensure proper cleanup
+        const disposeEditor = () => {
+          if (!editorRef.current) return;
           try {
-            const originalEditor = editorRef.current.getOriginalEditor();
-            const modifiedEditor = editorRef.current.getModifiedEditor();
-
-            // Clear models before disposing to prevent the TextModel disposal error
-            if (originalEditor) {
-              try {
-                const model = originalEditor.getModel();
-                if (model) {
-                  originalEditor.setModel(null);
-                  // Don't dispose the model as Monaco will handle it
-                }
-              } catch (error) {
-                console.debug('Error clearing original editor model:', error);
-              }
+            const editor = editorRef.current as MonacoDiffEditor & { __disposables?: IDisposable[] };
+            if (editor.__disposables) {
+              editor.__disposables.forEach((d: IDisposable) => {
+                try { d.dispose(); } catch (error) { /* ignore */ }
+              });
+              editor.__disposables = [];
             }
 
-            if (modifiedEditor) {
-              try {
-                const model = modifiedEditor.getModel();
-                if (model) {
-                  modifiedEditor.setModel(null);
-                  // Don't dispose the model as Monaco will handle it
-                }
-              } catch (error) {
-                console.debug('Error clearing modified editor model:', error);
+            try {
+              const originalEditor = editorRef.current.getOriginalEditor();
+              const modifiedEditor = editorRef.current.getModifiedEditor();
+              if (originalEditor) {
+                try {
+                  const model = originalEditor.getModel();
+                  if (model) originalEditor.setModel(null);
+                } catch { /* ignore */ }
               }
-            }
-          } catch (error) {
-            console.debug('Error accessing editor instances:', error);
-          }
+              if (modifiedEditor) {
+                try {
+                  const model = modifiedEditor.getModel();
+                  if (model) modifiedEditor.setModel(null);
+                } catch { /* ignore */ }
+              }
+            } catch { /* ignore */ }
 
-          // Finally dispose of the diff editor itself
-          try {
-            editorRef.current.dispose();
-          } catch (error) {
-            console.debug('Error disposing diff editor:', error);
-          }
-
-          editorRef.current = null;
-        } catch (error) {
-          console.debug('Error during Monaco editor cleanup:', error);
+            try {
+              editorRef.current.dispose();
+            } catch { /* ignore */ }
+            editorRef.current = null;
+          } catch { /* ignore */ }
+        };
+        if (typeof window !== 'undefined' && 'requestAnimationFrame' in window) {
+          requestAnimationFrame(disposeEditor);
+        } else {
+          setTimeout(disposeEditor, 0);
         }
       }
 

@@ -457,286 +457,82 @@ export function registerGitHandlers(ipcMain: IpcMain, services: AppServices): vo
 
   ipcMain.handle('sessions:get-combined-diff', async (_event, sessionId: string, executionIds?: number[]) => {
     try {
-      console.log('[get-combined-diff] Called with:', { sessionId, executionIds });
-
-      // Get session to find worktree path
       const session = await sessionManager.getSession(sessionId);
       if (!session || !session.worktreePath) {
         return { success: false, error: 'Session or worktree path not found' };
       }
 
-      // Handle uncommitted changes request
-      if (executionIds && executionIds.length === 1 && executionIds[0] === 0) {
-        // Verify the worktree exists and has uncommitted changes
-        try {
-          const status = execSync('git status --porcelain', { 
-            cwd: session.worktreePath, 
-            encoding: 'utf8' 
-          });
-        } catch (error) {
-          console.error('Error checking git status:', error);
+      const { commits } = await getSessionCommitHistory(session, 50);
+
+      // Single selection
+      if (executionIds && executionIds.length === 1) {
+        const id = executionIds[0];
+        if (id === 0) {
+          const res = await gitDiffManager.captureWorkingDirectoryDiff(session.worktreePath);
+          return { success: true, data: res };
         }
-        
-        const uncommittedDiff = await gitDiffManager.captureWorkingDirectoryDiff(session.worktreePath);
-        return { success: true, data: uncommittedDiff };
+        const idx = id - 1;
+        if (idx < 0 || idx >= commits.length) {
+          return { success: false, error: 'Invalid execution ID' };
+        }
+        const res = gitDiffManager.getCommitDiff(session.worktreePath, commits[idx].hash);
+        return { success: true, data: res };
       }
 
-      const { commits, comparisonBranch, historySource } = await getSessionCommitHistory(session, 50);
-
-      if (!commits.length) {
-        return {
-          success: true,
-          data: {
-            diff: '',
-            stats: { additions: 0, deletions: 0, filesChanged: 0 },
-            changedFiles: []
-          }
-        };
-      }
-
-      // If we have a range selection (2+ IDs), use git diff between them
+      // Range or multi-select
       if (executionIds && executionIds.length >= 2) {
-        console.log('[get-combined-diff] Handling multiple selections:', executionIds);
-        const sortedIds = [...executionIds].sort((a, b) => a - b);
-        console.log('[get-combined-diff] Sorted IDs:', sortedIds);
+        const sorted = [...executionIds].sort((a, b) => a - b);
+        const includesUncommitted = sorted.includes(0);
 
-        // Handle range that includes uncommitted changes
-        if (sortedIds[0] === 0 || sortedIds[1] === 0) {
-          console.log('[get-combined-diff] Range includes uncommitted changes');
-          // If uncommitted is in the range, get diff from the other commit to working directory
-          const commitId = sortedIds[0] === 0 ? sortedIds[1] : sortedIds[0];
-          const commitIndex = commitId - 1;
-
-          if (commitIndex >= 0 && commitIndex < commits.length) {
-            const fromCommit = commits[commitIndex];
-            // Get diff from commit to working directory (includes uncommitted changes)
-            const diff = execSync(
-              `git diff ${fromCommit.hash}`,
-              { cwd: session.worktreePath, encoding: 'utf8', maxBuffer: 10 * 1024 * 1024 }
-            );
-
-            const stats = gitDiffManager.parseDiffStats(
-              execSync(`git diff --stat ${fromCommit.hash}`, { cwd: session.worktreePath, encoding: 'utf8' })
-            );
-
-            const changedFiles = execSync(
-              `git diff --name-only ${fromCommit.hash}`,
-              { cwd: session.worktreePath, encoding: 'utf8' }
-            ).trim().split('\n').filter(Boolean);
-
-            return {
-              success: true,
-              data: {
-                diff,
-                stats,
-                changedFiles,
-                beforeHash: fromCommit.hash,
-                afterHash: 'UNCOMMITTED'
-              }
-            };
+        if (includesUncommitted) {
+          const commitId = sorted.find(id => id !== 0);
+          if (!commitId) {
+            const res = await gitDiffManager.captureWorkingDirectoryDiff(session.worktreePath);
+            return { success: true, data: res };
           }
-        }
-
-        // For regular commit selections, get NET changes from before oldest to newest
-        // Using the parent of older commit as baseline
-        console.log('[get-combined-diff] Getting net changes from parent of older commit');
-        const newerIndex = sortedIds[0] - 1;                     // Smallest ID = newest commit
-        const olderIndex = sortedIds[sortedIds.length - 1] - 1; // Largest ID = oldest commit
-        console.log('[get-combined-diff] Indices:', { newerIndex, olderIndex, commitsLength: commits.length, sortedIds });
-        console.log('[get-combined-diff] All commits order:', commits.map((c, i) => ({ index: i, id: i+1, hash: c.hash.substring(0, 7), message: c.message })));
-
-        if (newerIndex >= 0 && newerIndex < commits.length && olderIndex >= 0 && olderIndex < commits.length) {
-          const newerCommit = commits[newerIndex];
-          const olderCommit = commits[olderIndex];
-          console.log('[get-combined-diff] Commits:', {
-            newerCommit: { hash: newerCommit.hash, message: newerCommit.message },
-            olderCommit: { hash: olderCommit.hash, message: olderCommit.message }
-          });
-
-          // Use git diff with parent syntax directly (olderCommit^..newerCommit)
-          // This shows changes from the parent of older commit to newer commit
-          const diffRange = `${olderCommit.hash}^..${newerCommit.hash}`;
-          console.log('[get-combined-diff] Diff range:', diffRange);
-
-          try {
-            const diff = await gitDiffManager.captureCommitDiff(
-              session.worktreePath,
-              `${olderCommit.hash}^`,  // Parent of older commit
-              newerCommit.hash
-            );
-            console.log('[get-combined-diff] Diff stats:', diff.stats);
-            return { success: true, data: diff };
-          } catch (error) {
-            // If parent doesn't exist (initial commit), use older commit itself
-            console.log('[get-combined-diff] Parent not accessible, using older commit as baseline');
-            const diff = await gitDiffManager.captureCommitDiff(
-              session.worktreePath,
-              olderCommit.hash,
-              newerCommit.hash
-            );
-            console.log('[get-combined-diff] Diff stats (fallback):', diff.stats);
-            return { success: true, data: diff };
+          const idx = commitId - 1;
+          if (idx < 0 || idx >= commits.length) {
+            return { success: false, error: 'Invalid execution range' };
           }
-        }
-      }
-
-      // If no specific execution IDs are provided, get all diffs including uncommitted changes
-      if (!executionIds || executionIds.length === 0) {
-        if (commits.length === 0) {
-          // No commits, but there might be uncommitted changes
-          const uncommittedDiff = await gitDiffManager.captureWorkingDirectoryDiff(session.worktreePath);
-          return { success: true, data: uncommittedDiff };
+          const fromHash = commits[idx].hash;
+          const res = await gitDiffManager.captureDiffFromCommitToWorkingTree(session.worktreePath, fromHash);
+          return { success: true, data: res };
         }
 
-        // For a single commit, show changes from before the commit to working directory
-        if (commits.length === 1) {
-          let fromCommitHash: string;
-          try {
-            // Try to get the parent of the commit
-            fromCommitHash = execSync(`git rev-parse "${commits[0].hash}^"`, {
-              cwd: session.worktreePath,
-              encoding: 'utf8'
-            }).trim();
-          } catch (error) {
-            // If there's no parent (initial commit), use git's empty tree hash
-            fromCommitHash = '4b825dc642cb6eb9a060e54bf8d69288fbee4904';
-          }
-
-          // Get diff from parent to working directory (includes the commit and any uncommitted changes)
-          const diff = execSync(
-            `git diff ${fromCommitHash}`,
-            { cwd: session.worktreePath, encoding: 'utf8', maxBuffer: 10 * 1024 * 1024 }
-          );
-          
-          const stats = gitDiffManager.parseDiffStats(
-            execSync(`git diff --stat ${fromCommitHash}`, { cwd: session.worktreePath, encoding: 'utf8' })
-          );
-          
-          const changedFiles = execSync(
-            `git diff --name-only ${fromCommitHash}`,
-            { cwd: session.worktreePath, encoding: 'utf8' }
-          ).trim().split('\n').filter(f => f);
-
-          return { 
-            success: true, 
-            data: {
-              diff,
-              stats,
-              changedFiles
-            }
-          };
+        const oldestId = Math.max(...sorted);
+        const newestId = Math.min(...sorted);
+        const olderIdx = oldestId - 1;
+        const newerIdx = newestId - 1;
+        if (olderIdx < 0 || newerIdx < 0 || olderIdx >= commits.length || newerIdx >= commits.length) {
+          return { success: false, error: 'Invalid execution range' };
         }
-
-        // For multiple commits, get diff from parent of first commit to working directory (all changes including uncommitted)
-        const firstCommit = commits[commits.length - 1]; // Oldest commit
-        let fromCommitHash: string;
+        const older = commits[olderIdx];
+        const newer = commits[newerIdx];
 
         try {
-          // Try to get the parent of the first commit
-          fromCommitHash = execSync(`git rev-parse "${firstCommit.hash}^"`, {
-            cwd: session.worktreePath,
-            encoding: 'utf8'
-          }).trim();
-        } catch (error) {
-          // If there's no parent (initial commit), use git's empty tree hash
-          fromCommitHash = '4b825dc642cb6eb9a060e54bf8d69288fbee4904';
-        }
-
-        // Get diff from the parent of first commit to working directory (includes uncommitted changes)
-        const diff = execSync(
-          `git diff ${fromCommitHash}`,
-          { cwd: session.worktreePath, encoding: 'utf8', maxBuffer: 10 * 1024 * 1024 }
-        );
-        
-        const stats = gitDiffManager.parseDiffStats(
-          execSync(`git diff --stat ${fromCommitHash}`, { cwd: session.worktreePath, encoding: 'utf8' })
-        );
-        
-        const changedFiles = execSync(
-          `git diff --name-only ${fromCommitHash}`,
-          { cwd: session.worktreePath, encoding: 'utf8' }
-        ).trim().split('\n').filter(f => f);
-
-        return { 
-          success: true, 
-          data: {
-            diff,
-            stats,
-            changedFiles
-          }
-        };
-      }
-
-      // For multiple individual selections, get NET changes from parent of oldest to newest
-      if (executionIds.length > 2) {
-        console.log('[get-combined-diff] Handling multiple selections (>2):', executionIds);
-        const sortedIds = [...executionIds].sort((a, b) => a - b);
-        const firstId = sortedIds[sortedIds.length - 1]; // Highest ID = oldest commit
-        const lastId = sortedIds[0]; // Lowest ID = newest commit
-        console.log('[get-combined-diff] Sorted range:', { firstId, lastId, sortedIds });
-
-        const fromIndex = firstId - 1;
-        const toIndex = lastId - 1;
-
-        if (fromIndex >= 0 && fromIndex < commits.length && toIndex >= 0 && toIndex < commits.length) {
-          const fromCommit = commits[fromIndex]; // Oldest selected
-          const toCommit = commits[toIndex]; // Newest selected
-          console.log('[get-combined-diff] Commits:', {
-            fromCommit: { hash: fromCommit.hash, message: fromCommit.message },
-            toCommit: { hash: toCommit.hash, message: toCommit.message }
-          });
-
-          // Get the parent of the oldest commit as baseline
-          let baseCommitHash: string;
-          try {
-            const parentResult = execSync(`git rev-parse "${fromCommit.hash}^"`, {
-              cwd: session.worktreePath,
-              encoding: 'utf8'
-            }).trim();
-
-            if (parentResult === fromCommit.hash) {
-              console.log('[get-combined-diff] Parent not accessible, using older commit as baseline');
-              baseCommitHash = fromCommit.hash;
-            } else {
-              baseCommitHash = parentResult;
-              console.log('[get-combined-diff] Base commit (parent of oldest):', baseCommitHash);
-            }
-          } catch (error) {
-            console.log('[get-combined-diff] No parent found, using older commit as baseline');
-            baseCommitHash = fromCommit.hash;
-          }
-
-          // Get NET diff from parent to newest commit
-          console.log('[get-combined-diff] Getting diff from', baseCommitHash, 'to', toCommit.hash);
-          const diff = await gitDiffManager.captureCommitDiff(
-            session.worktreePath,
-            baseCommitHash,
-            toCommit.hash
-          );
-          console.log('[get-combined-diff] Diff stats:', diff.stats);
-          return { success: true, data: diff };
+          const res = await gitDiffManager.captureCommitDiff(session.worktreePath, `${older.hash}^`, newer.hash);
+          return { success: true, data: res };
+        } catch {
+          const res = await gitDiffManager.captureCommitDiff(session.worktreePath, older.hash, newer.hash);
+          return { success: true, data: res };
         }
       }
 
-      // Single commit selection (but not uncommitted changes)
-      if (executionIds.length === 1 && executionIds[0] !== 0) {
-        const commitIndex = executionIds[0] - 1;
-        if (commitIndex >= 0 && commitIndex < commits.length) {
-          const commit = commits[commitIndex];
-          const diff = gitDiffManager.getCommitDiff(session.worktreePath, commit.hash);
-          return { success: true, data: diff };
-        }
+      // No explicit selection: show diff from parent of oldest commit to working tree
+      if (commits.length === 0) {
+        const res = await gitDiffManager.captureWorkingDirectoryDiff(session.worktreePath);
+        return { success: true, data: res };
       }
 
-      // Fallback to empty diff
-      return {
-        success: true,
-        data: {
-          diff: '',
-          stats: { additions: 0, deletions: 0, filesChanged: 0 },
-          changedFiles: []
-        }
-      };
+      const oldest = commits[commits.length - 1];
+      let base: string;
+      try {
+        base = execSync(`git rev-parse "${oldest.hash}^"`, { cwd: session.worktreePath, encoding: 'utf8' }).trim();
+      } catch {
+        base = '4b825dc642cb6eb9a060e54bf8d69288fbee4904';
+      }
+      const res = await gitDiffManager.captureDiffFromCommitToWorkingTree(session.worktreePath, base);
+      return { success: true, data: res };
     } catch (error) {
       console.error('Failed to get combined diff:', error);
       const errorMessage = error instanceof Error ? error.message : 'Failed to get combined diff';
