@@ -593,7 +593,7 @@ export function registerGitHandlers(ipcMain: IpcMain, services: AppServices): vo
           let fromCommitHash: string;
           try {
             // Try to get the parent of the commit
-            fromCommitHash = execSync(`git rev-parse ${commits[0].hash}^`, {
+            fromCommitHash = execSync(`git rev-parse "${commits[0].hash}^"`, {
               cwd: session.worktreePath,
               encoding: 'utf8'
             }).trim();
@@ -633,7 +633,7 @@ export function registerGitHandlers(ipcMain: IpcMain, services: AppServices): vo
 
         try {
           // Try to get the parent of the first commit
-          fromCommitHash = execSync(`git rev-parse ${firstCommit.hash}^`, {
+          fromCommitHash = execSync(`git rev-parse "${firstCommit.hash}^"`, {
             cwd: session.worktreePath,
             encoding: 'utf8'
           }).trim();
@@ -689,7 +689,7 @@ export function registerGitHandlers(ipcMain: IpcMain, services: AppServices): vo
           // Get the parent of the oldest commit as baseline
           let baseCommitHash: string;
           try {
-            const parentResult = execSync(`git rev-parse ${fromCommit.hash}^`, {
+            const parentResult = execSync(`git rev-parse "${fromCommit.hash}^"`, {
               cwd: session.worktreePath,
               encoding: 'utf8'
             }).trim();
@@ -1354,7 +1354,7 @@ export function registerGitHandlers(ipcMain: IpcMain, services: AppServices): vo
 
       // Ensure there is at least one parent commit
       try {
-        execSync('git rev-parse HEAD^', { cwd: session.worktreePath, encoding: 'utf8' });
+        execSync('git rev-parse "HEAD^"', { cwd: session.worktreePath, encoding: 'utf8' });
       } catch {
         return { success: false, error: 'No parent commit to reset to' };
       }

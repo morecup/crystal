@@ -74,24 +74,28 @@ export class GitDiffManager {
       console.log(`[GitDiffManager] captureCommitDiff: from=${fromCommit} to=${to} in ${worktreePath}`);
       this.logger?.verbose(`Capturing git diff in ${worktreePath} from ${fromCommit} to ${to}`);
 
-      // Get diff between commits
-      const diff = this.getGitCommitDiff(worktreePath, fromCommit, to);
-      console.log(`[GitDiffManager] Diff length: ${diff.length} chars`);
+      // Resolve refs (handles caret ^ on Windows cmd) to stable hashes first
+      const resolvedFrom = this.resolveRef(worktreePath, fromCommit);
+      const resolvedTo = this.resolveRef(worktreePath, to);
 
       // Get changed files between commits
-      const changedFiles = this.getChangedFilesBetweenCommits(worktreePath, fromCommit, to);
+      const changedFiles = this.getChangedFilesBetweenCommits(worktreePath, resolvedFrom, resolvedTo);
       console.log(`[GitDiffManager] Changed files:`, changedFiles);
 
+      // Get diff between commits
+      const diff = this.getGitCommitDiff(worktreePath, resolvedFrom, resolvedTo);
+      console.log(`[GitDiffManager] Diff length: ${diff.length} chars`);
+
       // Get diff stats between commits
-      const stats = this.getCommitDiffStats(worktreePath, fromCommit, to);
+      const stats = this.getCommitDiffStats(worktreePath, resolvedFrom, resolvedTo);
       console.log(`[GitDiffManager] Stats:`, stats);
 
       return {
         diff,
         stats,
         changedFiles,
-        beforeHash: fromCommit,
-        afterHash: to === 'HEAD' ? this.getCurrentCommitHash(worktreePath) : to
+        beforeHash: resolvedFrom,
+        afterHash: resolvedTo === 'HEAD' ? this.getCurrentCommitHash(worktreePath) : resolvedTo
       };
     } catch (error) {
       this.logger?.error(`Failed to capture commit diff in ${worktreePath}:`, error instanceof Error ? error : undefined);
@@ -477,7 +481,7 @@ export class GitDiffManager {
 
   private getChangedFilesBetweenCommits(worktreePath: string, fromCommit: string, toCommit: string): string[] {
     try {
-      const output = execSync(`git diff --name-only --no-renames ${fromCommit}..${toCommit}`, {
+      const output = execSync(`git diff --name-only ${fromCommit}..${toCommit}`, {
         cwd: worktreePath,
         encoding: 'utf8'
       });
@@ -540,6 +544,20 @@ export class GitDiffManager {
     } catch (error) {
       this.logger?.warn(`Could not get commit diff stats in ${worktreePath}`);
       return { additions: 0, deletions: 0, filesChanged: 0 };
+    }
+  }
+
+  /**
+   * Resolve a git ref (e.g., abc123^, HEAD) to a full commit hash.
+   * Avoids Windows cmd escaping issues with caret (^).
+   */
+  private resolveRef(worktreePath: string, ref: string): string {
+    try {
+      const out = execSync(`git rev-parse "${ref}"`, { cwd: worktreePath, encoding: 'utf8' });
+      const hash = out.trim();
+      return hash || ref;
+    } catch {
+      return ref;
     }
   }
 
