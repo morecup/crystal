@@ -91,10 +91,17 @@ const ExecutionList: React.FC<ExecutionListProps> = memo(({
 
   const handleCommitClick = (executionId: number, event: React.MouseEvent) => {
     if (event.shiftKey && rangeStart !== null) {
-      // Range selection with shift-click
+      // Range selection with shift-click - include all IDs in the range
       const start = Math.min(rangeStart, executionId);
       const end = Math.max(rangeStart, executionId);
-      onSelectionChange([start, end]);
+
+      // Create array with all IDs from start to end (inclusive)
+      const rangeIds: number[] = [];
+      for (let i = start; i <= end; i++) {
+        rangeIds.push(i);
+      }
+
+      onSelectionChange(rangeIds);
     } else {
       // Single selection
       setRangeStart(executionId);
@@ -138,11 +145,11 @@ const ExecutionList: React.FC<ExecutionListProps> = memo(({
   const isInRange = (executionId: number): boolean => {
     if (selectedExecutions.length === 0) return false;
     if (selectedExecutions.length === 1) return selectedExecutions[0] === executionId;
-    if (selectedExecutions.length === 2) {
-      const [start, end] = selectedExecutions;
-      return executionId >= Math.min(start, end) && executionId <= Math.max(start, end);
-    }
-    return false;
+
+    // For multiple selections, check if executionId is in the selected range
+    const min = Math.min(...selectedExecutions);
+    const max = Math.max(...selectedExecutions);
+    return executionId >= min && executionId <= max;
   };
 
   if (executions.length === 0) {

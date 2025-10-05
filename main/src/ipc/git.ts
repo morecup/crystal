@@ -494,10 +494,11 @@ export function registerGitHandlers(ipcMain: IpcMain, services: AppServices): vo
         };
       }
 
-      // If we have a range selection (2 IDs), use git diff between them
-      if (executionIds && executionIds.length === 2) {
-        console.log('[get-combined-diff] Handling 2 selections:', executionIds);
+      // If we have a range selection (2+ IDs), use git diff between them
+      if (executionIds && executionIds.length >= 2) {
+        console.log('[get-combined-diff] Handling multiple selections:', executionIds);
         const sortedIds = [...executionIds].sort((a, b) => a - b);
+        console.log('[get-combined-diff] Sorted IDs:', sortedIds);
 
         // Handle range that includes uncommitted changes
         if (sortedIds[0] === 0 || sortedIds[1] === 0) {
@@ -536,11 +537,13 @@ export function registerGitHandlers(ipcMain: IpcMain, services: AppServices): vo
           }
         }
 
-        // For regular commit selections, combine the diffs of selected commits only
-        console.log('[get-combined-diff] Combining diffs of selected commits');
-        const newerIndex = sortedIds[0] - 1;   // Lower ID = newer commit
-        const olderIndex = sortedIds[1] - 1;   // Higher ID = older commit
-        console.log('[get-combined-diff] Indices:', { newerIndex, olderIndex, commitsLength: commits.length });
+        // For regular commit selections, get NET changes from before oldest to newest
+        // Using the parent of older commit as baseline
+        console.log('[get-combined-diff] Getting net changes from parent of older commit');
+        const newerIndex = sortedIds[0] - 1;                     // Smallest ID = newest commit
+        const olderIndex = sortedIds[sortedIds.length - 1] - 1; // Largest ID = oldest commit
+        console.log('[get-combined-diff] Indices:', { newerIndex, olderIndex, commitsLength: commits.length, sortedIds });
+        console.log('[get-combined-diff] All commits order:', commits.map((c, i) => ({ index: i, id: i+1, hash: c.hash.substring(0, 7), message: c.message })));
 
         if (newerIndex >= 0 && newerIndex < commits.length && olderIndex >= 0 && olderIndex < commits.length) {
           const newerCommit = commits[newerIndex];
@@ -550,21 +553,30 @@ export function registerGitHandlers(ipcMain: IpcMain, services: AppServices): vo
             olderCommit: { hash: olderCommit.hash, message: olderCommit.message }
           });
 
-          // Get individual diffs and combine them
-          const diffs: GitDiffResult[] = [];
+          // Use git diff with parent syntax directly (olderCommit^..newerCommit)
+          // This shows changes from the parent of older commit to newer commit
+          const diffRange = `${olderCommit.hash}^..${newerCommit.hash}`;
+          console.log('[get-combined-diff] Diff range:', diffRange);
 
-          // Get diff for each selected commit
-          for (let i = olderIndex; i >= newerIndex; i--) {
-            const commit = commits[i];
-            console.log('[get-combined-diff] Getting diff for commit:', commit.hash);
-            const commitDiff = gitDiffManager.getCommitDiff(session.worktreePath, commit.hash);
-            diffs.push(commitDiff);
+          try {
+            const diff = await gitDiffManager.captureCommitDiff(
+              session.worktreePath,
+              `${olderCommit.hash}^`,  // Parent of older commit
+              newerCommit.hash
+            );
+            console.log('[get-combined-diff] Diff stats:', diff.stats);
+            return { success: true, data: diff };
+          } catch (error) {
+            // If parent doesn't exist (initial commit), use older commit itself
+            console.log('[get-combined-diff] Parent not accessible, using older commit as baseline');
+            const diff = await gitDiffManager.captureCommitDiff(
+              session.worktreePath,
+              olderCommit.hash,
+              newerCommit.hash
+            );
+            console.log('[get-combined-diff] Diff stats (fallback):', diff.stats);
+            return { success: true, data: diff };
           }
-
-          // Combine the diffs
-          const combined = gitDiffManager.combineDiffs(diffs, session.worktreePath);
-          console.log('[get-combined-diff] Combined diff stats:', combined.stats);
-          return { success: true, data: combined };
         }
       }
 
@@ -655,7 +667,7 @@ export function registerGitHandlers(ipcMain: IpcMain, services: AppServices): vo
         };
       }
 
-      // For multiple individual selections, we need to combine diffs of each selected commit
+      // For multiple individual selections, get NET changes from parent of oldest to newest
       if (executionIds.length > 2) {
         console.log('[get-combined-diff] Handling multiple selections (>2):', executionIds);
         const sortedIds = [...executionIds].sort((a, b) => a - b);
@@ -667,23 +679,42 @@ export function registerGitHandlers(ipcMain: IpcMain, services: AppServices): vo
         const toIndex = lastId - 1;
 
         if (fromIndex >= 0 && fromIndex < commits.length && toIndex >= 0 && toIndex < commits.length) {
-          console.log('[get-combined-diff] Getting individual diffs for selected commits');
+          const fromCommit = commits[fromIndex]; // Oldest selected
+          const toCommit = commits[toIndex]; // Newest selected
+          console.log('[get-combined-diff] Commits:', {
+            fromCommit: { hash: fromCommit.hash, message: fromCommit.message },
+            toCommit: { hash: toCommit.hash, message: toCommit.message }
+          });
 
-          // Get individual diffs and combine them
-          const diffs: GitDiffResult[] = [];
+          // Get the parent of the oldest commit as baseline
+          let baseCommitHash: string;
+          try {
+            const parentResult = execSync(`git rev-parse ${fromCommit.hash}^`, {
+              cwd: session.worktreePath,
+              encoding: 'utf8'
+            }).trim();
 
-          // Get diff for each selected commit (from oldest to newest)
-          for (let i = fromIndex; i >= toIndex; i--) {
-            const commit = commits[i];
-            console.log('[get-combined-diff] Getting diff for commit:', commit.hash);
-            const commitDiff = gitDiffManager.getCommitDiff(session.worktreePath, commit.hash);
-            diffs.push(commitDiff);
+            if (parentResult === fromCommit.hash) {
+              console.log('[get-combined-diff] Parent not accessible, using older commit as baseline');
+              baseCommitHash = fromCommit.hash;
+            } else {
+              baseCommitHash = parentResult;
+              console.log('[get-combined-diff] Base commit (parent of oldest):', baseCommitHash);
+            }
+          } catch (error) {
+            console.log('[get-combined-diff] No parent found, using older commit as baseline');
+            baseCommitHash = fromCommit.hash;
           }
 
-          // Combine the diffs
-          const combined = gitDiffManager.combineDiffs(diffs, session.worktreePath);
-          console.log('[get-combined-diff] Combined diff stats:', combined.stats);
-          return { success: true, data: combined };
+          // Get NET diff from parent to newest commit
+          console.log('[get-combined-diff] Getting diff from', baseCommitHash, 'to', toCommit.hash);
+          const diff = await gitDiffManager.captureCommitDiff(
+            session.worktreePath,
+            baseCommitHash,
+            toCommit.hash
+          );
+          console.log('[get-combined-diff] Diff stats:', diff.stats);
+          return { success: true, data: diff };
         }
       }
 

@@ -444,9 +444,10 @@ export class GitDiffManager {
 
   private getGitCommitDiff(worktreePath: string, fromCommit: string, toCommit: string): string {
     try {
-      return execSync(`git diff ${fromCommit}..${toCommit}`, { 
-        cwd: worktreePath, 
-        encoding: 'utf8' 
+      return execSync(`git diff ${fromCommit}..${toCommit}`, {
+        cwd: worktreePath,
+        encoding: 'utf8',
+        maxBuffer: 50 * 1024 * 1024 // 50MB buffer for large diffs
       });
     } catch (error) {
       this.logger?.warn(`Could not get git commit diff in ${worktreePath}`);
@@ -476,9 +477,9 @@ export class GitDiffManager {
 
   private getChangedFilesBetweenCommits(worktreePath: string, fromCommit: string, toCommit: string): string[] {
     try {
-      const output = execSync(`git diff --name-only ${fromCommit}..${toCommit}`, { 
-        cwd: worktreePath, 
-        encoding: 'utf8' 
+      const output = execSync(`git diff --name-only --no-renames ${fromCommit}..${toCommit}`, {
+        cwd: worktreePath,
+        encoding: 'utf8'
       });
       return output.trim().split('\n').filter((f: string) => f.length > 0);
     } catch (error) {

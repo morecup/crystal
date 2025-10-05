@@ -28,7 +28,8 @@ class CommandExecutor {
 
     // Get enhanced shell PATH
     const shellPath = getShellPath();
-    
+    console.log(`[CommandExecutor] Using shell PATH:`, shellPath);
+
     // Merge enhanced PATH into options (but remove our custom silent flag)
     const { silent: _silent, ...cleanOptions } = extendedOptions || {};
     const enhancedOptions = {
@@ -42,16 +43,26 @@ class CommandExecutor {
 
     try {
       const result = nodeExecSync(command, enhancedOptions as ExecSyncOptions);
-      
+
       // Log success with a preview of the result (unless silent mode)
       if (result && !silentMode) {
         const resultStr = result.toString();
         const lines = resultStr.split('\n');
-        const preview = lines[0].substring(0, 100) + 
+        const preview = lines[0].substring(0, 100) +
                         (lines.length > 1 ? ` ... (${lines.length} lines)` : '');
         console.log(`[CommandExecutor] Success: ${preview}`);
+
+        // Debug: log full result for git diff --name-only commands
+        if (command.includes('git diff --name-only')) {
+          console.log(`[CommandExecutor] Result is Buffer:`, Buffer.isBuffer(result));
+          console.log(`[CommandExecutor] Result length:`, result.length);
+          console.log(`[CommandExecutor] Result hex:`, result.toString('hex'));
+          console.log(`[CommandExecutor] Full result:`, JSON.stringify(resultStr));
+          console.log(`[CommandExecutor] Result type:`, typeof result);
+          console.log(`[CommandExecutor] Result constructor:`, result.constructor.name);
+        }
       }
-      
+
       return result;
     } catch (error: unknown) {
       // Log error (unless silent mode)
