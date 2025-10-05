@@ -187,6 +187,7 @@ const DiffViewer = memo(forwardRef<DiffViewerHandle, DiffViewerProps>(({ diff, s
   const [viewType, setViewType] = useState<'split' | 'inline'>('split');
   const [showFullContent, setShowFullContent] = useState(false);
   const [expandedFiles, setExpandedFiles] = useState<Set<string>>(new Set());
+  const [activeIndex, setActiveIndex] = useState<number | null>(null);
   const [filesWithFullContent, setFilesWithFullContent] = useState<FileDiff[]>([]);
   const [loadingFullContent, setLoadingFullContent] = useState(false);
   const [loadErrors, setLoadErrors] = useState<Record<string, string>>({});
@@ -422,22 +423,25 @@ const DiffViewer = memo(forwardRef<DiffViewerHandle, DiffViewerProps>(({ diff, s
   }, [files, showFullContent, sessionId, mainBranch, parallelLimit, beforeCommitHash, afterCommitHash]);
 
   useEffect(() => {
-    // Expand all files by default
+    // 默认只展开第一个文件，减少同时挂载编辑器的概率
     if (files.length > 0) {
-      setExpandedFiles(new Set(files.map((f, i) => `${f.path}-${i}`)));
+      const firstKey = `${files[0]?.path}-0`;
+      setExpandedFiles(new Set(firstKey ? [firstKey] : []));
+      setActiveIndex(0);
+    } else {
+      setExpandedFiles(new Set());
+      setActiveIndex(null);
     }
   }, [files]);
 
-  const toggleFile = (fileKey: string) => {
-    setExpandedFiles(prev => {
-      const newSet = new Set(prev);
-      if (newSet.has(fileKey)) {
-        newSet.delete(fileKey);
-      } else {
-        newSet.add(fileKey);
-      }
+  const toggleFile = (fileKey: string, index: number) => {
+    setExpandedFiles(() => {
+      const newSet = new Set<string>();
+      // 单选展开：只保留当前展开项，避免多实例编辑器
+      newSet.add(fileKey);
       return newSet;
     });
+    setActiveIndex(index);
   };
 
   const handleFileSave = useCallback((filePath: string) => {
@@ -456,6 +460,7 @@ const DiffViewer = memo(forwardRef<DiffViewerHandle, DiffViewerProps>(({ diff, s
         if (fileKey && !expandedFiles.has(fileKey)) {
           setExpandedFiles(prev => new Set([...prev, fileKey]));
         }
+        setActiveIndex(index);
         
         // Then scroll to it with a small delay to allow expansion animation
         setTimeout(() => {
@@ -582,7 +587,7 @@ const DiffViewer = memo(forwardRef<DiffViewerHandle, DiffViewerProps>(({ diff, s
             }
             
             return (
-              <div 
+                <div 
                 key={fileKey} 
                 id={`file-${index}`}
                 data-file-path={file.path}
@@ -591,7 +596,7 @@ const DiffViewer = memo(forwardRef<DiffViewerHandle, DiffViewerProps>(({ diff, s
                 {/* File header */}
                 <div 
                   className="px-4 py-3 bg-surface-secondary hover:bg-surface-hover cursor-pointer transition-colors"
-                  onClick={() => toggleFile(fileKey)}
+                  onClick={() => toggleFile(fileKey, index)}
                 >
                   <div className="flex items-center justify-between">
                     <span className="font-medium text-text-primary flex items-center gap-2">
@@ -639,33 +644,9 @@ const DiffViewer = memo(forwardRef<DiffViewerHandle, DiffViewerProps>(({ diff, s
                         </div>
                       </div>
                     ) : (
-                      <>
-                        {loadErrors[file.path] && showFullContent ? (
-                          <div className="p-4 bg-status-error/10 border-b border-status-error/30">
-                            <div className="flex items-center gap-2 text-status-error">
-                              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                              </svg>
-                              <span className="font-medium">Failed to load full file content</span>
-                            </div>
-                            <p className="mt-1 text-sm text-status-error/80">
-                              {loadErrors[file.path]}
-                            </p>
-                            <p className="mt-2 text-sm text-status-error/80">
-                              ⚠️ Auto-save is disabled for this file to prevent data loss. Only the diff is shown below.
-                            </p>
-                          </div>
-                        ) : null}
-                        <MonacoDiffViewer
-                          key={`${file.path}-${index}-${showFullContent ? 'full' : 'diff'}`}
-                          file={file}
-                          sessionId={sessionId || ''}
-                          isDarkMode={isDarkMode}
-                          viewType={viewType}
-                          onSave={() => handleFileSave(file.path)}
-                          isReadOnly={!showFullContent || !!loadErrors[file.path]}
-                        />
-                      </>
+                      <div className="p-3 text-xs text-text-tertiary bg-surface-secondary">
+                        预览在下方“内容区”显示（仅保留一个编辑器以提升稳定性）。
+                      </div>
                     )}
                   </div>
                 )}
@@ -673,6 +654,37 @@ const DiffViewer = memo(forwardRef<DiffViewerHandle, DiffViewerProps>(({ diff, s
             );
           })}
         </div>
+
+        {/* 单实例 Monaco 区域：仅渲染激活文件，避免频繁卸载造成竞态 */}
+        {activeIndex !== null && filesToRender[activeIndex] && (
+          <div className="border-t border-border-primary">
+            {loadErrors[filesToRender[activeIndex].path] && showFullContent ? (
+              <div className="p-4 bg-status-error/10 border-b border-status-error/30">
+                <div className="flex items-center gap-2 text-status-error">
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                  <span className="font-medium">Failed to load full file content</span>
+                </div>
+                <p className="mt-1 text-sm text-status-error/80">
+                  {loadErrors[filesToRender[activeIndex].path]}
+                </p>
+                <p className="mt-2 text-sm text-status-error/80">
+                  ⚠️ Auto-save is disabled for this file to prevent data loss. Only the diff is shown below.
+                </p>
+              </div>
+            ) : null}
+            <MonacoDiffViewer
+              key={`${filesToRender[activeIndex].path}-${activeIndex}-${showFullContent ? 'full' : 'diff'}`}
+              file={filesToRender[activeIndex]}
+              sessionId={sessionId || ''}
+              isDarkMode={isDarkMode}
+              viewType={viewType}
+              onSave={() => handleFileSave(filesToRender[activeIndex].path)}
+              isReadOnly={!showFullContent || !!loadErrors[filesToRender[activeIndex].path]}
+            />
+          </div>
+        )}
     </div>
   );
 }));
