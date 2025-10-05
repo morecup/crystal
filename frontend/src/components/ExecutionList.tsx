@@ -336,6 +336,11 @@ const ExecutionList: React.FC<ExecutionListProps> = memo(({
                   {` (${formatAbsoluteTimeZH(hoverData.timestamp)})`}
                 </span>
               </div>
+              {hoverData.after_commit_hash && hoverData.after_commit_hash !== 'UNCOMMITTED' && (
+                <div className="mt-1 text-xs text-text-tertiary font-mono">
+                  提交ID: {hoverData.after_commit_hash}
+                </div>
+              )}
               <div className="mt-2 text-sm text-text-secondary whitespace-pre-wrap break-words">
                 {hoverData.commit_message || hoverData.prompt_text || `Commit ${hoverData.execution_sequence}`}
               </div>
