@@ -58,6 +58,14 @@ const ExecutionList: React.FC<ExecutionListProps> = memo(({
   const [containerRight, setContainerRight] = useState<number>(0);
   const listRef = useRef<HTMLDivElement>(null);
   const hideTimerRef = useRef<number | null>(null);
+  // 当父组件设置了默认选中项（单选）时，同步设置范围选择起点，便于直接 Shift 选择范围
+  useEffect(() => {
+    if (selectedExecutions.length === 1) {
+      setRangeStart(selectedExecutions[0]);
+    } else if (selectedExecutions.length === 0) {
+      setRangeStart(null);
+    }
+  }, [selectedExecutions]);
   // 监听窗口与列表滚动，更新容器右边界，确保悬浮卡片固定在“列表的右边”且不被遮挡
   useEffect(() => {
     const update = () => {
