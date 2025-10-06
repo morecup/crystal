@@ -2,6 +2,7 @@ import { execSync } from '../utils/commandExecutor';
 import * as fs from 'fs';
 import * as path from 'path';
 import type { Logger } from '../utils/logger';
+import type { ConfigManager } from './configManager';
 
 export interface GitDiffStats {
   additions: number;
@@ -26,7 +27,26 @@ export interface GitCommit {
 }
 
 export class GitDiffManager {
-  constructor(private logger?: Logger) {}
+  private configManager?: ConfigManager;
+
+  constructor(private logger?: Logger, configManager?: ConfigManager) {
+    this.configManager = configManager;
+  }
+
+  /**
+   * Set the config manager after initialization
+   */
+  setConfigManager(configManager: ConfigManager): void {
+    this.configManager = configManager;
+  }
+
+  /**
+   * Get the configured context lines for git diff (default: 3)
+   */
+  private getContextLines(): number {
+    const contextLines = this.configManager?.getConfig()?.diffSettings?.contextLines;
+    return typeof contextLines === 'number' && contextLines >= 0 ? contextLines : 3;
+  }
 
   /**
    * Capture git diff for a worktree directory
@@ -248,8 +268,9 @@ export class GitDiffManager {
    */
   getCommitDiff(worktreePath: string, commitHash: string): GitDiffResult {
     try {
+      const contextLines = this.getContextLines();
       // 使用 --patch 明确输出补丁内容，并加 -m 以兼容合并提交
-      const diff = execSync(`git show --format= --patch -m ${commitHash}`, {
+      const diff = execSync(`git show -U${contextLines} --format= --patch -m ${commitHash}`, {
         cwd: worktreePath,
         encoding: 'utf8',
         maxBuffer: 10 * 1024 * 1024
@@ -358,9 +379,10 @@ export class GitDiffManager {
   async getCombinedDiff(worktreePath: string, mainBranch: string): Promise<GitDiffResult> {
     // Get diff against main branch
     try {
+      const contextLines = this.getContextLines();
 
       // Get diff between current branch and main
-      const diff = execSync(`git diff origin/${mainBranch}...HEAD`, {
+      const diff = execSync(`git diff -U${contextLines} origin/${mainBranch}...HEAD`, {
         cwd: worktreePath,
         encoding: 'utf8'
       });
@@ -406,14 +428,18 @@ export class GitDiffManager {
       // Check git status to see what files have changes
       execSync('git status --porcelain', { cwd: worktreePath, encoding: 'utf8' });
 
+      // Get configured context lines
+      const contextLines = this.getContextLines();
+
       // Get diff of both staged and unstaged changes against HEAD
       // Using 'git diff HEAD' to include both staged and unstaged changes
-      let diff = execSync('git diff HEAD', { 
-        cwd: worktreePath, 
+      // -U<n> specifies the number of context lines
+      let diff = execSync(`git diff -U${contextLines} HEAD`, {
+        cwd: worktreePath,
         encoding: 'utf8',
         maxBuffer: 10 * 1024 * 1024 // 10MB buffer for large diffs
       });
-      
+
       // Get untracked files and create diff-like output for them
       const untrackedFiles = this.getUntrackedFiles(worktreePath);
       if (untrackedFiles.length > 0) {
@@ -422,7 +448,7 @@ export class GitDiffManager {
           diff = diff ? diff + '\n' + untrackedDiff : untrackedDiff;
         }
       }
-      
+
       return diff;
     } catch (error) {
       this.logger?.warn(`Could not get git diff in ${worktreePath}`, error instanceof Error ? error : undefined);
@@ -433,7 +459,8 @@ export class GitDiffManager {
 
   private getGitCommitDiff(worktreePath: string, fromCommit: string, toCommit: string): string {
     try {
-      return execSync(`git diff ${fromCommit}..${toCommit}`, {
+      const contextLines = this.getContextLines();
+      return execSync(`git diff -U${contextLines} ${fromCommit}..${toCommit}`, {
         cwd: worktreePath,
         encoding: 'utf8',
         maxBuffer: 50 * 1024 * 1024 // 50MB buffer for large diffs

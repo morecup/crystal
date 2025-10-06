@@ -12,6 +12,7 @@ interface DiffSettingsProps {
 
 const DEFAULT_MAX_FILE_MB = 5;
 const DEFAULT_MAX_PARALLEL = 3;
+const DEFAULT_CONTEXT_LINES = 3;
 
 const DiffSettings: React.FC<DiffSettingsProps> = ({ isOpen, onClose }) => {
   const { config, updateConfig } = useConfigStore();
@@ -25,26 +26,35 @@ const DiffSettings: React.FC<DiffSettingsProps> = ({ isOpen, onClose }) => {
     if (typeof n === 'number' && n > 0) return n;
     return DEFAULT_MAX_PARALLEL;
   }, [config]);
+  const currentContextLines = useMemo(() => {
+    const n = config?.diffSettings?.contextLines;
+    if (typeof n === 'number' && n >= 0) return n;
+    return DEFAULT_CONTEXT_LINES;
+  }, [config]);
 
   const [maxFileMB, setMaxFileMB] = useState<number>(currentMaxFileMB);
   const [maxParallel, setMaxParallel] = useState<number>(currentMaxParallel);
+  const [contextLines, setContextLines] = useState<number>(currentContextLines);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     if (!isOpen) return;
     setMaxFileMB(currentMaxFileMB);
     setMaxParallel(currentMaxParallel);
-  }, [isOpen, currentMaxFileMB, currentMaxParallel]);
+    setContextLines(currentContextLines);
+  }, [isOpen, currentMaxFileMB, currentMaxParallel, currentContextLines]);
 
   const handleSave = async () => {
     const mb = Math.max(1, Math.floor(maxFileMB || DEFAULT_MAX_FILE_MB));
     const parallel = Math.max(1, Math.floor(maxParallel || DEFAULT_MAX_PARALLEL));
+    const context = Math.max(0, Math.floor(contextLines ?? DEFAULT_CONTEXT_LINES));
     setSaving(true);
     try {
       await updateConfig({
         diffSettings: {
           maxFileBytes: mb * 1024 * 1024,
           maxParallelReads: parallel,
+          contextLines: context,
         },
       });
       onClose();
@@ -56,6 +66,7 @@ const DiffSettings: React.FC<DiffSettingsProps> = ({ isOpen, onClose }) => {
   const handleReset = () => {
     setMaxFileMB(DEFAULT_MAX_FILE_MB);
     setMaxParallel(DEFAULT_MAX_PARALLEL);
+    setContextLines(DEFAULT_CONTEXT_LINES);
   };
 
   return (
@@ -84,6 +95,18 @@ const DiffSettings: React.FC<DiffSettingsProps> = ({ isOpen, onClose }) => {
               value={maxParallel}
               onChange={(e) => setMaxParallel(Number(e.target.value))}
               helperText="建议 2-4，过高可能导致瞬时内存峰值冲高"
+              fullWidth
+            />
+          </div>
+          <div>
+            <Input
+              type="number"
+              min={0}
+              step={1}
+              label="Git Diff 上下文行数"
+              value={contextLines}
+              onChange={(e) => setContextLines(Number(e.target.value))}
+              helperText="控制 git diff 显示的差异上下文行数（默认为 3，0 表示仅显示变更行）"
               fullWidth
             />
           </div>

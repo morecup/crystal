@@ -463,7 +463,7 @@ async function initializeServices() {
     configManager,
     additionalOptions: { permissionIpcPath }
   });
-  gitDiffManager = new GitDiffManager();
+  gitDiffManager = new GitDiffManager(undefined, configManager);
   gitStatusManager = new GitStatusManager(sessionManager, worktreeManager, gitDiffManager, logger);
   executionTracker = new ExecutionTracker(sessionManager, gitDiffManager);
   worktreeNameGenerator = new WorktreeNameGenerator(configManager);

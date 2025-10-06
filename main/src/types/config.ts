@@ -29,6 +29,8 @@ export interface AppConfig {
     maxFileBytes?: number;
     // Max parallel reads when loading file contents in diff view
     maxParallelReads?: number;
+    // Number of context lines to show in git diff (default: 3)
+    contextLines?: number;
   };
   // Notification settings
   notifications?: {
@@ -86,6 +88,7 @@ export interface UpdateConfigRequest {
   diffSettings?: {
     maxFileBytes?: number;
     maxParallelReads?: number;
+    contextLines?: number;
   };
   notifications?: {
     enabled: boolean;

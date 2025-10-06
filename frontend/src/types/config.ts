@@ -18,6 +18,8 @@ export interface AppConfig {
     maxFileBytes?: number;
     // 文件内容读取并发上限
     maxParallelReads?: number;
+    // git diff 显示的上下文行数（默认为 3）
+    contextLines?: number;
   };
   notifications?: {
     enabled: boolean;
