@@ -24,6 +24,7 @@ export const LogsView: React.FC<LogsViewProps> = ({ sessionId, isVisible }) => {
   const [searchMatches, setSearchMatches] = useState<number[]>([]);
   const [autoScroll, setAutoScroll] = useState(true);
   const [copied, setCopied] = useState(false);
+  const [wrapText, setWrapText] = useState(false);
   const logContainerRef = useRef<HTMLDivElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const lastLogCount = useRef(0);
@@ -237,19 +238,36 @@ export const LogsView: React.FC<LogsViewProps> = ({ sessionId, isVisible }) => {
         </div>
 
         <div className="flex items-center gap-2">
+          {/* Text wrap toggle */}
+          <button
+            onClick={() => setWrapText(!wrapText)}
+            className={cn(
+              "p-1.5 rounded transition-colors",
+              wrapText
+                ? "bg-interactive/20 text-interactive"
+                : "text-text-secondary hover:text-text-primary hover:bg-surface-hover"
+            )}
+            title={wrapText ? "文本换行：开启" : "文本换行：关闭"}
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                d="M4 6h16M4 12h12m-12 6h16" />
+            </svg>
+          </button>
+
           {/* Auto-scroll toggle */}
           <button
             onClick={() => setAutoScroll(!autoScroll)}
             className={cn(
               "p-1.5 rounded transition-colors",
-              autoScroll 
-                ? "bg-interactive/20 text-interactive" 
+              autoScroll
+                ? "bg-interactive/20 text-interactive"
                 : "text-text-secondary hover:text-text-primary hover:bg-surface-hover"
             )}
             title={autoScroll ? "Auto-scroll enabled" : "Auto-scroll disabled"}
           >
             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} 
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
                 d="M19 14l-7 7m0 0l-7-7m7 7V3" />
             </svg>
           </button>
@@ -358,9 +376,12 @@ export const LogsView: React.FC<LogsViewProps> = ({ sessionId, isVisible }) => {
       )}
 
       {/* Logs Container */}
-      <div 
+      <div
         ref={logContainerRef}
-        className="flex-1 min-h-0 overflow-y-auto overflow-x-auto font-mono text-sm p-4 bg-bg-primary text-text-primary whitespace-pre-wrap break-all"
+        className={cn(
+          "flex-1 min-h-0 overflow-y-auto overflow-x-auto font-mono text-sm p-4 bg-bg-primary text-text-primary",
+          wrapText ? "whitespace-pre-wrap break-all" : "whitespace-pre"
+        )}
         onScroll={(e) => {
           const target = e.target as HTMLDivElement;
           // Consider "at bottom" only if within 50px of the bottom
