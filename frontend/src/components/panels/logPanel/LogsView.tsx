@@ -110,16 +110,33 @@ export const LogsView: React.FC<LogsViewProps> = ({ sessionId, isVisible }) => {
     lastLogCount.current = logs.length;
   }, [logs, autoScroll]);
 
-  // Filter logs based on filter term
-  const filteredLogs = useMemo(() => {
-    return logs.filter(log => {
-      const matchesFilter = !filterTerm || 
-        log.message.toLowerCase().includes(filterTerm.toLowerCase()) ||
-        (log.source && log.source.toLowerCase().includes(filterTerm.toLowerCase()));
-      
-      return matchesFilter;
-    });
-  }, [logs, filterTerm]);
+  // Combine chunked messages into physical lines to avoid mid-line splits
+  const allLines = useMemo(() => {
+    const lines: string[] = [];
+    let buffer = '';
+    for (const log of logs) {
+      const parts = log.message.split(/\r?\n/);
+      for (let i = 0; i < parts.length; i++) {
+        const part = parts[i];
+        if (i < parts.length - 1) {
+          buffer += part;
+          lines.push(buffer);
+          buffer = '';
+        } else {
+          buffer += part;
+        }
+      }
+    }
+    if (buffer) lines.push(buffer);
+    return lines;
+  }, [logs]);
+
+  // Filter combined lines based on filter term
+  const filteredLines = useMemo(() => {
+    if (!filterTerm) return allLines;
+    const needle = filterTerm.toLowerCase();
+    return allLines.filter(line => line.toLowerCase().includes(needle));
+  }, [allLines, filterTerm]);
 
   // Find search matches in filtered logs
   useEffect(() => {
@@ -132,15 +149,15 @@ export const LogsView: React.FC<LogsViewProps> = ({ sessionId, isVisible }) => {
     const matches: number[] = [];
     const searchLower = searchTerm.toLowerCase();
     
-    filteredLogs.forEach((log, index) => {
-      if (log.message.toLowerCase().includes(searchLower)) {
+    filteredLines.forEach((line, index) => {
+      if (line.toLowerCase().includes(searchLower)) {
         matches.push(index);
       }
     });
 
     setSearchMatches(matches);
     setCurrentSearchIndex(matches.length > 0 ? 0 : -1);
-  }, [searchTerm, filteredLogs, searchVisible]);
+  }, [searchTerm, filteredLines, searchVisible]);
 
   const goToNextMatch = useCallback(() => {
     if (searchMatches.length === 0) return;
@@ -204,7 +221,7 @@ export const LogsView: React.FC<LogsViewProps> = ({ sessionId, isVisible }) => {
   };
 
   const handleExportLogs = () => {
-    const logText = filteredLogs.map(log => log.message).join('\n');
+    const logText = filteredLines.join('\n');
     
     const blob = new Blob([logText], { type: 'text/plain' });
     const url = URL.createObjectURL(blob);
@@ -219,7 +236,7 @@ export const LogsView: React.FC<LogsViewProps> = ({ sessionId, isVisible }) => {
 
   const handleCopyLogs = async () => {
     try {
-      const logText = filteredLogs.map(log => log.message).join('\n');
+      const logText = filteredLines.join('\n');
       await navigator.clipboard.writeText(logText);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
@@ -234,7 +251,7 @@ export const LogsView: React.FC<LogsViewProps> = ({ sessionId, isVisible }) => {
       {/* Header */}
       <div className="flex items-center justify-between px-4 py-2 bg-surface-secondary border-b border-border-primary">
         <div className="text-sm text-text-secondary">
-          Logs ({filteredLogs.length}{logs.length !== filteredLogs.length ? ` / ${logs.length}` : ''})
+          Logs ({filteredLines.length}{allLines.length !== filteredLines.length ? ` / ${allLines.length}` : ''})
         </div>
 
         <div className="flex items-center gap-2">
@@ -380,8 +397,9 @@ export const LogsView: React.FC<LogsViewProps> = ({ sessionId, isVisible }) => {
         ref={logContainerRef}
         className={cn(
           "flex-1 min-h-0 overflow-y-auto overflow-x-auto font-mono text-sm p-4 bg-bg-primary text-text-primary",
-          wrapText ? "whitespace-pre-wrap break-all" : "whitespace-pre"
+          wrapText ? "whitespace-pre-wrap break-all" : "whitespace-pre break-normal"
         )}
+        style={wrapText ? undefined : { wordBreak: 'keep-all', overflowWrap: 'normal' }}
         onScroll={(e) => {
           const target = e.target as HTMLDivElement;
           // Consider "at bottom" only if within 50px of the bottom
@@ -392,18 +410,18 @@ export const LogsView: React.FC<LogsViewProps> = ({ sessionId, isVisible }) => {
           }
         }}
       >
-        {filteredLogs.length === 0 ? (
+        {filteredLines.length === 0 ? (
           <div className="text-center text-text-tertiary py-8">
             {filterTerm ? 'No logs match your filter' : 'No logs available'}
           </div>
         ) : (
-          <div className="break-all">
-            {filteredLogs.map((log, index) => {
+          <div className={wrapText ? "break-all" : "break-normal"}>
+            {filteredLines.map((line, index) => {
               const isCurrentMatch = searchVisible && searchMatches.includes(index) && searchMatches[currentSearchIndex] === index;
               const isMatch = searchVisible && searchTerm && searchMatches.includes(index);
               
               // Convert ANSI codes to HTML
-              const htmlContent = ansiConverter.toHtml(log.message);
+              const htmlContent = ansiConverter.toHtml(line);
               
               if (!searchTerm || !searchVisible) {
                 return (
@@ -431,7 +449,7 @@ export const LogsView: React.FC<LogsViewProps> = ({ sessionId, isVisible }) => {
                   {isHighlighted ? (
                     // When highlighting search results, show raw text with highlight
                     // This is a trade-off: we lose ANSI colors but gain search highlighting
-                    log.message.split(new RegExp(`(${searchTerm.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi'))
+                    line.split(new RegExp(`(${searchTerm.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi'))
                       .map((part, i) => 
                         part.toLowerCase() === searchTerm.toLowerCase() ? (
                           <span key={i} className="bg-yellow-500/50 text-black px-0.5">
