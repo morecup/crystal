@@ -34,7 +34,12 @@ const CombinedDiffView: React.FC<CombinedDiffViewProps> = memo(({
   const [forceRefresh, setForceRefresh] = useState<number>(0);
   const [selectedFile, setSelectedFile] = useState<string | undefined>();
   const [showDiffSettings, setShowDiffSettings] = useState(false);
-  // 计算未提交变更的文件数量（来自 Git 实时状态，而非本地编辑计数）
+  const [sidebarWidth, setSidebarWidth] = useState(33); // percentage
+  const [fileListHeight, setFileListHeight] = useState(33); // percentage
+  const [isDraggingSidebar, setIsDraggingSidebar] = useState(false);
+  const [isDraggingFileList, setIsDraggingFileList] = useState(false);
+
+  // 计算未提交变更的文件数量（来自 Git 实时状态,而非本地编辑计数）
   const uncommittedFileCount = useMemo(() => {
     const uncommitted = executions.find(e => e.id === 0);
     return uncommitted?.stats_files_changed ?? 0;
@@ -343,6 +348,57 @@ const CombinedDiffView: React.FC<CombinedDiffViewProps> = memo(({
     }
   }, [sessionId, selectedExecutions]);
 
+  // Resizing handlers
+  const handleSidebarMouseDown = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    setIsDraggingSidebar(true);
+  }, []);
+
+  const handleFileListMouseDown = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    setIsDraggingFileList(true);
+  }, []);
+
+  useEffect(() => {
+    const handleMouseMove = (e: MouseEvent) => {
+      if (isDraggingSidebar) {
+        const container = document.querySelector('.combined-diff-view');
+        if (container) {
+          const rect = container.getBoundingClientRect();
+          const newWidth = ((e.clientX - rect.left) / rect.width) * 100;
+          setSidebarWidth(Math.min(Math.max(newWidth, 20), 60)); // 20%-60%
+        }
+      }
+      if (isDraggingFileList) {
+        const sidebar = document.querySelector('.commits-sidebar');
+        if (sidebar) {
+          const rect = sidebar.getBoundingClientRect();
+          const newHeight = ((e.clientY - rect.top) / rect.height) * 100;
+          setFileListHeight(Math.min(Math.max(newHeight, 20), 60)); // 20%-60%
+        }
+      }
+    };
+
+    const handleMouseUp = () => {
+      setIsDraggingSidebar(false);
+      setIsDraggingFileList(false);
+    };
+
+    if (isDraggingSidebar || isDraggingFileList) {
+      document.addEventListener('mousemove', handleMouseMove);
+      document.addEventListener('mouseup', handleMouseUp);
+      document.body.style.cursor = isDraggingSidebar ? 'col-resize' : 'row-resize';
+      document.body.style.userSelect = 'none';
+    }
+
+    return () => {
+      document.removeEventListener('mousemove', handleMouseMove);
+      document.removeEventListener('mouseup', handleMouseUp);
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+    };
+  }, [isDraggingSidebar, isDraggingFileList]);
+
   // Clear selected file when diff changes
   useEffect(() => {
     setSelectedFile(undefined);
@@ -591,35 +647,65 @@ const CombinedDiffView: React.FC<CombinedDiffViewProps> = memo(({
       <div className="flex-1 flex min-h-0">
         {/* Commits selection sidebar */}
         {!isFullscreen && (
-          <div className="w-1/3 border-r border-border-primary bg-surface-secondary overflow-hidden flex flex-col">
-            {/* File list - show only when we have a diff */}
-            {filesFromDiff.length > 0 && (
-              <div className="h-1/3 border-b border-border-primary overflow-y-auto">
-                <FileList
-                  files={filesFromDiff}
-                  onFileClick={handleFileClick}
-                  onFileDelete={handleFileDelete}
-                  selectedFile={selectedFile}
+          <>
+            <div
+              className="commits-sidebar border-r border-border-primary bg-surface-secondary overflow-hidden flex flex-col"
+              style={{ width: `${sidebarWidth}%` }}
+            >
+              {/* File list - show only when we have a diff */}
+              {filesFromDiff.length > 0 && (
+                <>
+                  <div
+                    className="border-b border-border-primary overflow-y-auto"
+                    style={{ height: `${fileListHeight}%` }}
+                  >
+                    <FileList
+                      files={filesFromDiff}
+                      onFileClick={handleFileClick}
+                      onFileDelete={handleFileDelete}
+                      selectedFile={selectedFile}
+                    />
+                  </div>
+
+                  {/* Horizontal resize handle */}
+                  <div
+                    className="h-1 bg-border-primary hover:bg-interactive cursor-row-resize transition-colors relative group"
+                    onMouseDown={handleFileListMouseDown}
+                  >
+                    <div className="absolute inset-0 flex items-center justify-center">
+                      <div className="w-8 h-0.5 bg-text-tertiary group-hover:bg-interactive rounded-full transition-colors" />
+                    </div>
+                  </div>
+                </>
+              )}
+
+              {/* Execution list */}
+              <div className={filesFromDiff.length > 0 ? "flex-1 overflow-hidden" : "h-full"}>
+                <ExecutionList
+                  sessionId={sessionId}
+                  executions={executions}
+                  selectedExecutions={selectedExecutions}
+                  onSelectionChange={handleSelectionChange}
+                  onCommit={() => setShowCommitDialog(true)}
+                  onRevert={handleRevert}
+                  onRestore={handleRestore}
+                  onDropLastCommit={handleDropLastCommit}
+                  historyLimitReached={limitReached}
+                  historyLimit={HISTORY_LIMIT}
                 />
               </div>
-            )}
-            
-            {/* Execution list */}
-            <div className={filesFromDiff.length > 0 ? "flex-1 overflow-hidden" : "h-full"}>
-              <ExecutionList
-                sessionId={sessionId}
-                executions={executions}
-                selectedExecutions={selectedExecutions}
-                onSelectionChange={handleSelectionChange}
-                onCommit={() => setShowCommitDialog(true)}
-                onRevert={handleRevert}
-                onRestore={handleRestore}
-                onDropLastCommit={handleDropLastCommit}
-                historyLimitReached={limitReached}
-                historyLimit={HISTORY_LIMIT}
-              />
             </div>
-          </div>
+
+            {/* Vertical resize handle */}
+            <div
+              className="w-1 bg-border-primary hover:bg-interactive cursor-col-resize transition-colors relative group"
+              onMouseDown={handleSidebarMouseDown}
+            >
+              <div className="absolute inset-0 flex items-center justify-center">
+                <div className="h-8 w-0.5 bg-text-tertiary group-hover:bg-interactive rounded-full transition-colors" />
+              </div>
+            </div>
+          </>
         )}
 
         {/* Diff preview */}
