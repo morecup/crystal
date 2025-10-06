@@ -1,6 +1,5 @@
 import { useState, useEffect, useMemo, memo, useCallback, forwardRef, useImperativeHandle } from 'react';
 import { MonacoDiffViewer } from './MonacoDiffViewer';
-import { FileText } from 'lucide-react';
 import type { DiffViewerProps } from '../../../types/diff';
 import type { FileDiff } from '../../../types/diff';
 import { useTheme } from '../../../contexts/ThemeContext';
@@ -569,43 +568,7 @@ const DiffViewer = memo(forwardRef<DiffViewerHandle, DiffViewerProps>(({ diff, s
         {/* Monaco Diff Viewer for current file */}
         {currentFile && (
           <div className="flex-1 border-t border-border-primary overflow-hidden">
-            {/* File info header */}
-            <div className="px-4 py-2 bg-surface-secondary border-b border-border-primary">
-              <div className="flex items-center justify-between">
-                <span className="font-medium text-text-primary flex items-center gap-2">
-                  <FileText className="w-4 h-4" />
-                  {currentFile.path}
-                  {currentFile.type === 'deleted' && (
-                    <span className="text-xs bg-status-error text-white px-2 py-0.5 rounded">Deleted</span>
-                  )}
-                  {currentFile.type === 'added' && (
-                    <span className="text-xs bg-status-success text-white px-2 py-0.5 rounded">Added</span>
-                  )}
-                </span>
-                <span className="text-xs text-text-tertiary flex items-center gap-2">
-                  {currentFile.additions > 0 && <span className="text-status-success">+{currentFile.additions}</span>}
-                  {currentFile.deletions > 0 && <span className="text-status-error">-{currentFile.deletions}</span>}
-                </span>
-              </div>
-            </div>
-
             {/* Error display */}
-            {loadErrors[currentFile.path] && showFullContent && (
-              <div className="p-4 bg-status-error/10 border-b border-status-error/30">
-                <div className="flex items-center gap-2 text-status-error">
-                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                  </svg>
-                  <span className="font-medium">Failed to load full file content</span>
-                </div>
-                <p className="mt-1 text-sm text-status-error/80">
-                  {loadErrors[currentFile.path]}
-                </p>
-                <p className="mt-2 text-sm text-status-error/80">
-                  ⚠️ Auto-save is disabled for this file to prevent data loss. Only the diff is shown below.
-                </p>
-              </div>
-            )}
 
             {/* Monaco diff viewer or message */}
             {currentFile.type === 'deleted' ? (
