@@ -1,6 +1,8 @@
 import { IpcMain } from 'electron';
 import type { AppServices } from './types';
 import type { CreateProjectRequest, UpdateProjectRequest } from '../../../frontend/src/types/project';
+import { panelManager } from '../services/panelManager';
+import { terminalPanelManager } from '../services/terminalPanelManager';
 
 export function registerProjectHandlers(ipcMain: IpcMain, services: AppServices): void {
   const { databaseService, sessionManager, worktreeManager } = services;
@@ -232,6 +234,25 @@ export function registerProjectHandlers(ipcMain: IpcMain, services: AppServices)
           console.log(`[Main] Closing terminal session ${session.id} before deleting project`);
           await sessionManager.closeTerminalSession(session.id);
         }
+
+        // 同步关闭该 Session 下的所有终端/WSL/tmux 面板对应的 PTY，释放工作目录占用
+        try {
+          const panels = panelManager.getPanelsForSession(session.id);
+          for (const p of panels) {
+            if (p.type === 'terminal' || p.type === 'wsl' || p.type === 'tmux') {
+              try { terminalPanelManager.destroyTerminal(p.id); } catch {}
+            }
+          }
+        } catch (e) {
+          console.warn('[Main] Failed to close panel terminals for session before project deletion:', e);
+        }
+      }
+
+      // 清理与该项目相关的 tmux 会话（Windows+WSL 场景安全冪等）
+      try {
+        await terminalPanelManager.cleanupTmuxSessionsForProject(project.path);
+      } catch (e) {
+        console.warn('[Main] Failed to cleanup tmux sessions for project during deletion:', e);
       }
       
       // Clean up all worktrees for this project (including archived sessions)

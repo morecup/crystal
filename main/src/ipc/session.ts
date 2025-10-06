@@ -1,4 +1,4 @@
-﻿import { IpcMain } from 'electron';
+import { IpcMain } from 'electron';
 import * as path from 'path';
 import * as fs from 'fs/promises';
 import { existsSync } from 'fs';
@@ -9,6 +9,7 @@ import { execSync } from '../utils/commandExecutor';
 import { getCurrentBranch } from '../services/gitPlumbingCommands';
 import { convertDbFolderToFolder } from './folders';
 import { panelManager } from '../services/panelManager';
+import { terminalPanelManager } from '../services/terminalPanelManager';
 import { cleanupSessionLogs } from './logs';
 import { 
   validateSessionExists, 
@@ -237,6 +238,18 @@ export function registerSessionHandlers(ipcMain: IpcMain, services: AppServices)
       let archiveMessage = `\r\n\x1b[36m[${timestamp}]\x1b[0m \x1b[1m\x1b[44m\x1b[37m 📦 ARCHIVING SESSION \x1b[0m\r\n`;
       archiveMessage += `\x1b[90mSession will be archived and removed from the active sessions list.\x1b[0m\r\n`;
 
+      // 先关闭该 Session 下所有终端/WSL/tmux 面板对应的 PTY，释放工作目录占用（尤其在 Windows 上）
+      try {
+        const panels = panelManager.getPanelsForSession(sessionId);
+        for (const p of panels) {
+          if (p.type === 'terminal' || p.type === 'wsl' || p.type === 'tmux') {
+            try { terminalPanelManager.destroyTerminal(p.id); } catch {}
+          }
+        }
+      } catch (e) {
+        console.warn('[IPC:sessions:delete] Failed to close terminal panels before cleanup:', e);
+      }
+
       // 精准删除当前 Session 相关的 tmux 会话（按 项目_分支_ 前缀）
       try {
         if (process.platform === 'win32') {
@@ -384,6 +397,18 @@ export function registerSessionHandlers(ipcMain: IpcMain, services: AppServices)
       }
       if (!dbSession.archived) {
         return { success: false, error: 'Session must be archived before permanent deletion' };
+      }
+
+      // 先关闭该 Session 下所有终端/WSL/tmux 面板对应的 PTY，释放工作目录占用（尤其在 Windows 上）
+      try {
+        const panels = panelManager.getPanelsForSession(sessionId);
+        for (const p of panels) {
+          if (p.type === 'terminal' || p.type === 'wsl' || p.type === 'tmux') {
+            try { terminalPanelManager.destroyTerminal(p.id); } catch {}
+          }
+        }
+      } catch (e) {
+        console.warn('[IPC:sessions:delete-permanent] Failed to close terminal panels before cleanup:', e);
       }
 
       // 再次精准清理与该 Session 相关的 tmux 会话（冪等安全）

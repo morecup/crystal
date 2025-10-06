@@ -4,6 +4,7 @@ import { join } from 'path';
 import { mkdir, rm, stat } from 'fs/promises';
 import { existsSync } from 'fs';
 import { getShellPath } from '../utils/shellPath';
+import { terminalPanelManager } from './terminalPanelManager';
 import { withLock } from '../utils/mutex';
 import type { ConfigManager } from './configManager';
 
@@ -185,6 +186,14 @@ export class WorktreeManager {
       const { baseDir } = this.getProjectPaths(projectPath, worktreeFolder);
       const worktreePath = join(baseDir, name);
       
+      // 先关闭可能占用该工作树目录的 PTY，并清理与该分支相关的 tmux 会话
+      try {
+        terminalPanelManager.destroyTerminalsUnderPath(worktreePath);
+      } catch {}
+      try {
+        await terminalPanelManager.killTmuxSessionsForProjectBranch(projectPath, name);
+      } catch {}
+
       try {
         await execWithShellPath(`git worktree remove "${worktreePath}" --force`, { cwd: projectPath });
       } catch (error: unknown) {
@@ -226,6 +235,25 @@ export class WorktreeManager {
    */
   async removeWorktreeByPath(projectPath: string, worktreePath: string): Promise<void> {
     return await withLock(`worktree-remove-${projectPath}-${worktreePath}`, async () => {
+      // 先关闭可能占用该工作树目录的 PTY，并清理与该分支相关的 tmux 会话
+      try {
+        terminalPanelManager.destroyTerminalsUnderPath(worktreePath);
+      } catch {}
+      try {
+        // 优先从工作树路径检测当前分支；失败时回退为目录名
+        let branch = '';
+        try {
+          const { stdout } = await execWithShellPath('git rev-parse --abbrev-ref HEAD', { cwd: worktreePath });
+          branch = (stdout || '').trim();
+        } catch {}
+        if (!branch) {
+          branch = worktreePath.split(/[/\\]/).filter(Boolean).pop() || '';
+        }
+        if (branch) {
+          await terminalPanelManager.killTmuxSessionsForProjectBranch(projectPath, branch);
+        }
+      } catch {}
+
       try {
         await execWithShellPath(`git worktree remove "${worktreePath}" --force`, { cwd: projectPath });
       } catch (error: any) {

@@ -573,6 +573,49 @@ export class TerminalPanelManager {
   getActiveTerminals(): string[] {
     return Array.from(this.terminals.keys());
   }
+
+  /**
+   * 根据工作目录前缀关闭所有终端 PTY，避免 Windows 下目录被占用
+   */
+  destroyTerminalsUnderPath(rootPath: string): void {
+    try {
+      const root = path.resolve(rootPath);
+      for (const [panelId, term] of this.terminals) {
+        try {
+          const panel = panelManager.getPanel(panelId);
+          const cwd = (panel?.state?.customState as any)?.cwd as string | undefined;
+          if (cwd && path.resolve(cwd).startsWith(root)) {
+            this.destroyTerminal(panelId);
+          }
+        } catch {}
+      }
+    } catch (e) {
+      console.warn('[TerminalPanelManager] destroyTerminalsUnderPath failed:', e);
+    }
+  }
+
+  /**
+   * 精准杀掉形如 `${project}_${branch}_*` 的 tmux 会话（Windows+WSL）
+   */
+  async killTmuxSessionsForProjectBranch(projectDir: string, branch: string): Promise<void> {
+    if (process.platform !== 'win32') return;
+    try {
+      let projectName = path.basename(projectDir);
+      try {
+        const projectRow = databaseService.getProjectByPath(projectDir);
+        if (projectRow?.name) projectName = projectRow.name;
+      } catch {}
+      const sanitize = (s: string) => String(s).replace(/[^\w.-]+/g, '-').replace(/^-+/, '').replace(/-+$/, '');
+      const prefix = `${sanitize(projectName)}_${sanitize(branch)}_`;
+      const regexPrefix = prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const killCmd = `tmux list-sessions -F '#S' 2>/dev/null | grep -E '^${regexPrefix}' | while read -r s; do tmux kill-session -t "$s" 2>/dev/null || true; done`;
+      try {
+        execFileSync('wsl.exe', ['-e', 'bash', '-lc', killCmd], { encoding: 'utf-8' as any });
+      } catch {}
+    } catch (e) {
+      console.warn('[TerminalPanelManager] killTmuxSessionsForProjectBranch failed:', e);
+    }
+  }
 }
 
 // Export singleton instance
