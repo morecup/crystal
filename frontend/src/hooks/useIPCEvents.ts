@@ -81,6 +81,17 @@ export function useIPCEvents() {
   const { setSessions, loadSessions, addSession, updateSession, deleteSession } = useSessionStore();
   const { showError } = useErrorStore();
   
+  // Listen for Logs process end to sync sidebar running indicator
+  useEffect(() => {
+    const unsubscribe = window.electronAPI?.events?.onProcessEnded?.((_data: { panelId: string; sessionId: string; exitCode: number | null }) => {
+      // When logs process exits by itself, broadcast to sidebar to clear running flag
+      window.dispatchEvent(new CustomEvent('script-session-changed', { detail: null }));
+    });
+    return () => {
+      unsubscribe?.();
+    };
+  }, []);
+  
   // Create throttled handlers for git status events
   const throttledGitStatusLoading = useRef(
     throttle((data: { sessionId: string }) => {

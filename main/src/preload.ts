@@ -422,6 +422,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.on('panel:activeChanged', wrappedCallback);
       return () => ipcRenderer.removeListener('panel:activeChanged', wrappedCallback);
     },
+
+    // Logs/process lifecycle events
+    onProcessEnded: (callback: (data: { panelId: string; sessionId: string; exitCode: number | null }) => void) => {
+      const wrappedCallback = (_event: Electron.IpcRendererEvent, data: { panelId: string; sessionId: string; exitCode: number | null }) => callback(data);
+      ipcRenderer.on('process:ended', wrappedCallback);
+      return () => ipcRenderer.removeListener('process:ended', wrappedCallback);
+    },
     
     
     // Folder events

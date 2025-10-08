@@ -478,9 +478,10 @@ export class LogsManager {
         timestamp: new Date().toISOString()
       });
       
-      // Also send specific event for the panel
+      // Also send specific event for the panel (include sessionId for UI sync)
       mainWindow.webContents.send('process:ended', {
         panelId,
+        sessionId,
         exitCode: code
       });
     }
