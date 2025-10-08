@@ -604,6 +604,16 @@ app.on('before-quit', async (event) => {
     return;
   }
   
+  // Stop any running scripts started via Logs Panel
+  try {
+    const { logsManager } = require('./services/panels/logPanel/logsManager') as typeof import('./services/panels/logPanel/logsManager');
+    console.log('[Main] Stopping logs panel scripts...');
+    await logsManager.cleanup();
+    console.log('[Main] Logs panel scripts stopped');
+  } catch (e) {
+    console.error('[Main] Failed to stop logs panel scripts:', e);
+  }
+
   // Cleanup all sessions and terminate child processes
   if (sessionManager) {
     console.log('[Main] Cleaning up sessions and terminating child processes...');
@@ -647,6 +657,16 @@ app.on('before-quit', async (event) => {
   // Stop version checker
   if (versionChecker) {
     versionChecker.stopPeriodicCheck();
+  }
+
+  // Destroy all terminal panel PTYs to ensure no child processes remain
+  try {
+    const { terminalPanelManager } = require('./services/terminalPanelManager') as typeof import('./services/terminalPanelManager');
+    console.log('[Main] Destroying all terminal panels...');
+    terminalPanelManager.destroyAllTerminals();
+    console.log('[Main] Terminal panels destroyed');
+  } catch (e) {
+    console.error('[Main] Failed to destroy terminal panels:', e);
   }
 
   // Close logger to ensure all logs are flushed
