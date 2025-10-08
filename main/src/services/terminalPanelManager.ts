@@ -134,15 +134,18 @@ export class TerminalPanelManager {
       const qRepo = this.bashSingleQuote(wslRepo);
       const sock = this.getPanelTmuxSocket(panel);
       const qSock = this.bashSingleQuote(sock);
+      // 过滤空选择（包含仅有换行的情况），仅在非空时复制到剪贴板
+      const copyFilterCmd = 'd=$(cat); t=$(printf %s "$d" | tr -d "\r\n"); if [ -n "$t" ]; then printf %s "$d" | iconv -f UTF-8 -t UTF-16LE | clip.exe; fi';
+      const qCopyCmd = this.bashSingleQuote(copyFilterCmd);
       // 仅为当前会话启用 tmux 鼠标模式并配置鼠标拖动选择后自动复制
       // - set-option (without -g): 仅影响当前会话,不修改全局配置
       // - mouse on: 启用鼠标支持
-      // - 在 copy-mode 中鼠标拖动结束后，直接通过 clip.exe 复制到 Windows 剪贴板
+      // - 在 copy-mode 中鼠标拖动结束后复制到 Windows 剪贴板（跳过空选择，避免清空剪贴板）
       // 通过 iconv 将 UTF-8 转为 Windows 剪贴板使用的 UTF-16LE，避免中文乱码
       const bashCmd = `tmux -L ${qSock} new-session -As ${qName} -c ${qRepo} \\; \\
         set-option mouse on \\; \\
-        bind-key -T copy-mode-vi MouseDragEnd1Pane send-keys -X copy-pipe-and-cancel "iconv -f UTF-8 -t UTF-16LE | clip.exe" \\; \\
-        bind-key -T copy-mode MouseDragEnd1Pane send-keys -X copy-pipe-and-cancel "iconv -f UTF-8 -t UTF-16LE | clip.exe"`;
+        bind-key -T copy-mode-vi MouseDragEnd1Pane send-keys -X copy-pipe-and-cancel ${qCopyCmd} \\; \\
+        bind-key -T copy-mode MouseDragEnd1Pane send-keys -X copy-pipe-and-cancel ${qCopyCmd}`;
       spawnArgs = ['-e', 'bash', '-lc', bashCmd];
       console.log('[TerminalPanelManager] Spawning WSL tmux session with session-specific mouse copy support');
     }
