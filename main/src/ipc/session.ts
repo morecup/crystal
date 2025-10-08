@@ -11,6 +11,7 @@ import { convertDbFolderToFolder } from './folders';
 import { panelManager } from '../services/panelManager';
 import { terminalPanelManager } from '../services/terminalPanelManager';
 import { cleanupSessionLogs } from './logs';
+import { logsManager } from '../services/panels/logPanel/logsManager';
 import { 
   validateSessionExists, 
   validatePanelSessionOwnership, 
@@ -1580,6 +1581,17 @@ export function registerSessionHandlers(ipcMain: IpcMain, services: AppServices)
         }
       } catch (loggingError) {
         console.warn('[IPC] Failed to record cancellation message for session stop:', loggingError);
+      }
+
+      // Also stop any running Logs panel process for this session to keep UI in sync
+      try {
+        const panels = panelManager.getPanelsForSession(sessionId);
+        const logsPanel = panels.find(p => p.type === 'logs');
+        if (logsPanel) {
+          await logsManager.stopScript(logsPanel.id);
+        }
+      } catch (e) {
+        console.warn('[IPC] Failed to stop logs panel during session stop:', e);
       }
 
       sessionManager.stopSession(sessionId);

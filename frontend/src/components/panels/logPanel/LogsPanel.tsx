@@ -55,6 +55,11 @@ const LogsPanel: React.FC<LogsPanelProps> = ({ panel, isActive }) => {
   const handleStop = async () => {
     try {
       await window.electronAPI.logs.stopScript(panel.id);
+      // Immediately reflect stop in UI and notify sidebar to clear running indicator
+      setIsRunning(false);
+      try {
+        window.dispatchEvent(new CustomEvent('script-session-changed', { detail: null }));
+      } catch {}
     } catch (error) {
       console.error('Failed to stop script:', error);
     }

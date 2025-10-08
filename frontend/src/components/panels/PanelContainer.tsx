@@ -82,7 +82,7 @@ export const PanelContainer: React.FC<PanelContainerProps> = React.memo(({
           </div>
         );
     }
-  }, [panel.type, panel.id, isActive, isMainRepo]); // Include stable deps only
+  }, [panel.type, panel.id, isActive, isMainRepo, panel.state]); // Include state updates so panels like Logs refresh on isRunning/exitCode changes
 
   return (
     <ErrorBoundary

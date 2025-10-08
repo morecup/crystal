@@ -14,7 +14,7 @@ Crystal is an open source project created by [Stravu](https://stravu.com/?utm_so
 2. Clone your fork locally
 3. Set up the development environment:
    ```bash
-   pnpm run setup
+   pnpm run setup不要
    ```
 4. Create a new branch for your feature or bug fix:
    ```bash
