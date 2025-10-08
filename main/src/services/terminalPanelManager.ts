@@ -130,10 +130,11 @@ export class TerminalPanelManager {
       // - set-option (without -g): 仅影响当前会话,不修改全局配置
       // - mouse on: 启用鼠标支持
       // - 在 copy-mode 中鼠标拖动结束后，直接通过 clip.exe 复制到 Windows 剪贴板
+      // 通过 iconv 将 UTF-8 转为 Windows 剪贴板使用的 UTF-16LE，避免中文乱码
       const bashCmd = `tmux -L ${qSock} new-session -As ${qName} -c ${qRepo} \\; \\
         set-option mouse on \\; \\
-        bind-key -T copy-mode-vi MouseDragEnd1Pane send-keys -X copy-pipe-and-cancel "clip.exe" \\; \\
-        bind-key -T copy-mode MouseDragEnd1Pane send-keys -X copy-pipe-and-cancel "clip.exe"`;
+        bind-key -T copy-mode-vi MouseDragEnd1Pane send-keys -X copy-pipe-and-cancel "iconv -f UTF-8 -t UTF-16LE | clip.exe" \\; \\
+        bind-key -T copy-mode MouseDragEnd1Pane send-keys -X copy-pipe-and-cancel "iconv -f UTF-8 -t UTF-16LE | clip.exe"`;
       spawnArgs = ['-e', 'bash', '-lc', bashCmd];
       console.log('[TerminalPanelManager] Spawning WSL tmux session with session-specific mouse copy support');
     }
