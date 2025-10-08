@@ -257,6 +257,23 @@ export class LogsManager {
     const childProcess = this.activeProcesses.get(panelId);
     if (!childProcess || !childProcess.pid) {
       this.activeProcesses.delete(panelId);
+      // Ensure UI reflects stopped state even if no active process is tracked
+      try {
+        const panel = await panelManager.getPanel(panelId);
+        if (panel) {
+          const currentState = (panel.state.customState as LogsPanelState) || ({} as LogsPanelState);
+          await panelManager.updatePanel(panelId, {
+            state: {
+              ...panel.state,
+              customState: {
+                ...currentState,
+                isRunning: false,
+                endTime: new Date().toISOString(),
+              } as LogsPanelState
+            }
+          });
+        }
+      } catch {}
       return;
     }
     
@@ -337,6 +354,24 @@ export class LogsManager {
     } catch (error) {
       console.error('Error killing process tree:', error);
     }
+
+    // After attempting to stop, proactively mark panel as not running to refresh UI immediately
+    try {
+      const panel = await panelManager.getPanel(panelId);
+      if (panel) {
+        const currentState = (panel.state.customState as LogsPanelState) || ({} as LogsPanelState);
+        await panelManager.updatePanel(panelId, {
+          state: {
+            ...panel.state,
+            customState: {
+              ...currentState,
+              isRunning: false,
+              endTime: new Date().toISOString(),
+            } as LogsPanelState
+          }
+        });
+      }
+    } catch {}
   }
   
   /**

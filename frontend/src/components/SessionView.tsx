@@ -121,13 +121,19 @@ export const SessionView = memo(() => {
     // Listen for panel events
     const unsubscribeCreated = window.electronAPI?.events?.onPanelCreated?.(handlePanelCreated);
     const unsubscribeUpdated = window.electronAPI?.events?.onPanelUpdated?.(handlePanelUpdated);
+    const unsubscribeActiveChanged = window.electronAPI?.events?.onPanelActiveChanged?.((data: { sessionId: string; panelId: string | null }) => {
+      if (data.sessionId === activeSession.id && data.panelId) {
+        setActivePanelInStore(activeSession.id, data.panelId);
+      }
+    });
     
     // Cleanup
     return () => {
       unsubscribeCreated?.();
       unsubscribeUpdated?.();
+      unsubscribeActiveChanged?.();
     };
-  }, [activeSession?.id, addPanel, updatePanelState, panels]);
+  }, [activeSession?.id, addPanel, updatePanelState, panels, setActivePanelInStore]);
 
   // Get panels for current session with memoization
   const sessionPanels = useMemo(

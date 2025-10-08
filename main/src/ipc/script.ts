@@ -61,6 +61,8 @@ export function registerScriptHandlers(ipcMain: IpcMain, { sessionManager }: App
         }
       } else {
         await sessionManager.stopRunningScript();
+        // Also stop any logs panel processes to keep UI state in sync
+        try { await logsManager.cleanup(); } catch {}
       }
       return { success: true };
     } catch (error) {

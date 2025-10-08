@@ -417,6 +417,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.on('panel:updated', wrappedCallback);
       return () => ipcRenderer.removeListener('panel:updated', wrappedCallback);
     },
+    onPanelActiveChanged: (callback: (data: { sessionId: string; panelId: string | null }) => void) => {
+      const wrappedCallback = (_event: Electron.IpcRendererEvent, data: { sessionId: string; panelId: string | null }) => callback(data);
+      ipcRenderer.on('panel:activeChanged', wrappedCallback);
+      return () => ipcRenderer.removeListener('panel:activeChanged', wrappedCallback);
+    },
+    
     
     // Folder events
     onFolderCreated: (callback: (folder: Folder) => void) => {

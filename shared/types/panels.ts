@@ -34,6 +34,7 @@ export interface TerminalPanelState {
   
   // Advanced persistence options
   tmuxSessionId?: string;        // For true session persistence via tmux
+  tmuxSocket?: string;           // Dedicated tmux server socket name (when isolating from global)
   outputSizeLimit?: number;      // Max lines to persist (default: 10000)
 }
 

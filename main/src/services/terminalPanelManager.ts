@@ -26,6 +26,25 @@ export class TerminalPanelManager {
   private terminals = new Map<string, TerminalProcess>();
   private readonly MAX_SCROLLBACK_LINES = 10000;
   
+  private getDefaultTmuxSocketName(): string {
+    const fromEnv = process.env.CRYSTAL_TMUX_SOCKET;
+    if (fromEnv && fromEnv.trim()) {
+      return this.sanitizeName(fromEnv.trim());
+    }
+    const base = `crystal-${process.pid}`;
+    return this.sanitizeName(base);
+  }
+
+  private getPanelTmuxSocket(panel?: ToolPanel): string {
+    try {
+      const cs = panel?.state?.customState as TerminalPanelState | undefined;
+      if (cs?.tmuxSocket && String(cs.tmuxSocket).trim()) {
+        return this.sanitizeName(String(cs.tmuxSocket).trim());
+      }
+    } catch {}
+    return this.getDefaultTmuxSocketName();
+  }
+  
   private sanitizeName(input: string): string {
     // 仅保留字母/数字/下划线/点/减号，其它替换为减号，并去除首尾多余减号
     const s = input.replace(/[^\w.-]+/g, '-').replace(/^-+/, '').replace(/-+$/, '');
@@ -105,15 +124,16 @@ export class TerminalPanelManager {
       const wslRepo = this.toWslPath(cwd);
       const qName = this.bashSingleQuote(sessionName);
       const qRepo = this.bashSingleQuote(wslRepo);
+      const sock = this.getPanelTmuxSocket(panel);
+      const qSock = this.bashSingleQuote(sock);
       // 仅为当前会话启用 tmux 鼠标模式并配置鼠标拖动选择后自动复制
       // - set-option (without -g): 仅影响当前会话,不修改全局配置
       // - mouse on: 启用鼠标支持
-      // - 鼠标拖动进入 copy-mode 并选择文本
-      // - 释放鼠标时自动复制到系统剪贴板(使用 xargs 防止空内容清空剪贴板)
-      const bashCmd = `tmux new-session -As ${qName} -c ${qRepo} \\; \\
+      // - 在 copy-mode 中鼠标拖动结束后，直接通过 clip.exe 复制到 Windows 剪贴板
+      const bashCmd = `tmux -L ${qSock} new-session -As ${qName} -c ${qRepo} \\; \\
         set-option mouse on \\; \\
-        bind-key -T copy-mode-vi MouseDragEnd1Pane send-keys -X copy-pipe-and-cancel "xargs -0 -I {} clip.exe <<<{}" \\; \\
-        bind-key -T copy-mode MouseDragEnd1Pane send-keys -X copy-pipe-and-cancel "xargs -0 -I {} clip.exe <<<{}"`;
+        bind-key -T copy-mode-vi MouseDragEnd1Pane send-keys -X copy-pipe-and-cancel "clip.exe" \\; \\
+        bind-key -T copy-mode MouseDragEnd1Pane send-keys -X copy-pipe-and-cancel "clip.exe"`;
       spawnArgs = ['-e', 'bash', '-lc', bashCmd];
       console.log('[TerminalPanelManager] Spawning WSL tmux session with session-specific mouse copy support');
     }
@@ -172,7 +192,10 @@ export class TerminalPanelManager {
             const base = this.sanitizeName(panel.title);
             return `${projectName}_${branch}_${base}`;
           })()
-        : (state.customState as any)?.tmuxSessionId
+        : (state.customState as any)?.tmuxSessionId,
+      tmuxSocket: (panel.type === 'tmux' && process.platform === 'win32' && shellInfo.name === 'wsl')
+        ? this.getPanelTmuxSocket(panel)
+        : (state.customState as any)?.tmuxSocket
     } as TerminalPanelState;
     
     await panelManager.updatePanel(panel.id, { state });
@@ -311,7 +334,9 @@ export class TerminalPanelManager {
     // 后台执行 rename-session
     const qOld = this.bashSingleQuote(oldName);
     const qNew = this.bashSingleQuote(newName);
-    const bashCmd = `tmux rename-session -t ${qOld} ${qNew}`;
+    const sock = this.getPanelTmuxSocket(panel);
+    const qSock = this.bashSingleQuote(sock);
+    const bashCmd = `tmux -L ${qSock} rename-session -t ${qOld} ${qNew}`;
     try {
       execFileSync('wsl.exe', ['-e', 'bash', '-lc', bashCmd], { encoding: 'utf-8' as any });
       // 成功后更新面板状态中的 tmux 会话名
@@ -337,14 +362,35 @@ export class TerminalPanelManager {
       if (projectRow?.name) projectName = projectRow.name;
     } catch {}
     const project = this.sanitizeName(projectName);
-    const listArgs = ['-e', 'bash', '-lc', "tmux list-sessions -F '#S' 2>/dev/null || true"];
-    let out = '';
+    // 收集本项目相关的 tmux socket（包含默认服务器，以便清理旧会话）
+    const sockets = new Set<string | null>();
     try {
-      out = execFileSync('wsl.exe', listArgs, { encoding: 'utf8' });
-    } catch {
-      return;
+      const proj = databaseService.getProjectByPath(projectDir);
+      if (proj) {
+        const allSessions = databaseService.getAllSessions(proj.id) || [];
+        for (const s of allSessions) {
+          const panels = panelManager.getPanelsForSession(String(s.id));
+          for (const p of panels) {
+            if (p.type === 'tmux') {
+              const cs = p.state?.customState as TerminalPanelState | undefined;
+              if (cs?.tmuxSocket) sockets.add(this.sanitizeName(String(cs.tmuxSocket)));
+            }
+          }
+        }
+      }
+    } catch {}
+    // 同时加入 null 代表默认服务器（兼容历史）
+    sockets.add(null);
+
+    const sessions: string[] = [];
+    for (const sock of sockets) {
+      const prefix = sock ? `tmux -L ${this.bashSingleQuote(sock)}` : 'tmux';
+      const listCmd = `${prefix} list-sessions -F '#S' 2>/dev/null || true`;
+      try {
+        const out = execFileSync('wsl.exe', ['-e', 'bash', '-lc', listCmd], { encoding: 'utf8' });
+        sessions.push(...out.split('\n').map(s => s.trim()).filter(Boolean));
+      } catch {}
     }
-    const sessions = out.split('\n').map(s => s.trim()).filter(Boolean);
     if (sessions.length === 0) return;
 
     // 准备“完成”分支规则
@@ -378,7 +424,12 @@ export class TerminalPanelManager {
       if (!isDone && donePattern && donePattern.test(branch)) isDone = true;
 
       if (!branchExists || isDone) {
-        try { execFileSync('wsl.exe', ['-e', 'bash', '-lc', `tmux kill-session -t ${this.bashSingleQuote(s)} 2>/dev/null || true`]); } catch {}
+        try {
+          for (const sock of sockets) {
+            const prefix = sock ? `tmux -L ${this.bashSingleQuote(sock)}` : 'tmux';
+            execFileSync('wsl.exe', ['-e', 'bash', '-lc', `${prefix} kill-session -t ${this.bashSingleQuote(s)} 2>/dev/null || true`]);
+          }
+        } catch {}
       }
     }
   }
@@ -553,6 +604,25 @@ export class TerminalPanelManager {
     } catch (error) {
       console.error(`[TerminalPanelManager] Error killing terminal ${panelId}:`, error);
     }
+    // If this is a tmux panel on Windows+WSL, proactively kill the tmux session to avoid orphaned sessions
+    try {
+      const panel = panelManager.getPanel(panelId);
+      if (panel && panel.type === 'tmux' && process.platform === 'win32') {
+        const shellInfo = ShellDetector.getWSLShell();
+        if (shellInfo.name === 'wsl') {
+          const customState = panel.state?.customState as TerminalPanelState | undefined;
+          const sessionName = customState?.tmuxSessionId;
+          const sock = this.getPanelTmuxSocket(panel);
+          if (sessionName) {
+            const qName = this.bashSingleQuote(sessionName);
+            const qSock = this.bashSingleQuote(sock);
+            execFileSync('wsl.exe', ['-e', 'bash', '-lc', `tmux -L ${qSock} kill-session -t ${qName} 2>/dev/null || true`], { encoding: 'utf-8' as any });
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('[TerminalPanelManager] Failed to kill tmux session on panel destroy:', e);
+    }
     
     // Remove from map
     this.terminals.delete(panelId);
@@ -608,10 +678,31 @@ export class TerminalPanelManager {
       const sanitize = (s: string) => String(s).replace(/[^\w.-]+/g, '-').replace(/^-+/, '').replace(/-+$/, '');
       const prefix = `${sanitize(projectName)}_${sanitize(branch)}_`;
       const regexPrefix = prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      const killCmd = `tmux list-sessions -F '#S' 2>/dev/null | grep -E '^${regexPrefix}' | while read -r s; do tmux kill-session -t "$s" 2>/dev/null || true; done`;
+      // 收集相关 sockets（含默认）
+      const sockets = new Set<string | null>();
       try {
-        execFileSync('wsl.exe', ['-e', 'bash', '-lc', killCmd], { encoding: 'utf-8' as any });
+        const proj = databaseService.getProjectByPath(projectDir);
+        if (proj) {
+          const allSessions = databaseService.getAllSessions(proj.id) || [];
+          for (const s of allSessions) {
+            const panels = panelManager.getPanelsForSession(String(s.id));
+            for (const p of panels) {
+              if (p.type === 'tmux') {
+                const cs = p.state?.customState as TerminalPanelState | undefined;
+                if (cs?.tmuxSocket) sockets.add(this.sanitizeName(String(cs.tmuxSocket)));
+              }
+            }
+          }
+        }
       } catch {}
+      sockets.add(null);
+      for (const sock of sockets) {
+        const prefixCmd = sock ? `tmux -L ${this.bashSingleQuote(sock)}` : 'tmux';
+        const killCmd = `${prefixCmd} list-sessions -F '#S' 2>/dev/null | grep -E '^${regexPrefix}' | while read -r s; do ${prefixCmd} kill-session -t "$s" 2>/dev/null || true; done`;
+        try {
+          execFileSync('wsl.exe', ['-e', 'bash', '-lc', killCmd], { encoding: 'utf-8' as any });
+        } catch {}
+      }
     } catch (e) {
       console.warn('[TerminalPanelManager] killTmuxSessionsForProjectBranch failed:', e);
     }
