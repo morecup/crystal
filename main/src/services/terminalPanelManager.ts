@@ -31,7 +31,15 @@ export class TerminalPanelManager {
     if (fromEnv && fromEnv.trim()) {
       return this.sanitizeName(fromEnv.trim());
     }
-    const base = `crystal-${process.pid}`;
+    // 默认使用固定的 tmux 服务器/Socket 名，便于命令行直接连接。
+    // 如需恢复旧的“每进程唯一”命名，可在启动脚本中设置环境变量覆盖：
+    //   CRYSTAL_TMUX_SOCKET=crystal-${process.pid}  // 由启动脚本展开为实际 pid
+    // 或设置为任意自定义值（例如：crystal-12345）。
+    // 环境变量优先生效，详见上方 fromEnv 分支。
+    // Default to a stable tmux server/socket name for easier CLI access.
+    // To restore per-process uniqueness, override via CRYSTAL_TMUX_SOCKET expanded in your launcher
+    // (e.g., set to crystal-${process.pid} so it becomes crystal-<pid> at runtime).
+    const base = 'crystal';
     return this.sanitizeName(base);
   }
 
