@@ -238,9 +238,16 @@ async function createWindow() {
       typeof arg === 'object' ? JSON.stringify(arg, null, 2) : String(arg)
     ).join(' ');
 
+    // Maximum length for log messages before truncation
+    const MAX_LOG_MESSAGE_LENGTH = 150;
+
+    const truncated = message.length > MAX_LOG_MESSAGE_LENGTH
+        ? message.slice(0, MAX_LOG_MESSAGE_LENGTH)
+        : message;
+
     // Write to logger if available
     if (logger) {
-      logger.info(message);
+      logger.info(truncated);
     } else {
       originalLog.apply(console, args);
     }
