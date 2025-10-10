@@ -54,7 +54,8 @@ export const PanelContainer: React.FC<PanelContainerProps> = React.memo(({
       case 'terminal':
       case 'wsl':
       case 'tmux':
-        return <TerminalPanel panel={panel} isActive={isActive} />;
+        // Key includes a renderer-only nonce to allow explicit remounts (e.g., Refresh)
+        return <TerminalPanel key={`${panel.id}:${panel.state?.renderNonce ?? 0}`} panel={panel} isActive={isActive} />;
       case 'diff':
         return <DiffPanel panel={panel} isActive={isActive} sessionId={panel.sessionId} isMainRepo={isMainRepo} />;
       case 'editor':

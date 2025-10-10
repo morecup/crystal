@@ -6,6 +6,7 @@ import { ToolPanel, ToolPanelType, PANEL_CAPABILITIES, LogsPanelState } from '..
 import { Button } from '../ui/Button';
 import { Dropdown } from '../ui/Dropdown';
 import { useSession } from '../../contexts/SessionContext';
+import { usePanelStore } from '../../stores/panelStore';
 
 export const PanelTabBar: React.FC<PanelTabBarProps> = memo(({
   panels,
@@ -22,6 +23,11 @@ export const PanelTabBar: React.FC<PanelTabBarProps> = memo(({
   const [editingPanelId, setEditingPanelId] = useState<string | null>(null);
   const [editingTitle, setEditingTitle] = useState('');
   const editInputRef = useRef<HTMLInputElement>(null);
+  // Context menu state for tmux tabs
+  const [menuPanelId, setMenuPanelId] = useState<string | null>(null);
+  const [menuPos, setMenuPos] = useState<{ x: number; y: number } | null>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const refreshPanel = usePanelStore(s => s.refreshPanel);
   
   // Memoize event handlers to prevent unnecessary re-renders
   const handlePanelClick = useCallback((panel: ToolPanel) => {
@@ -104,6 +110,20 @@ export const PanelTabBar: React.FC<PanelTabBarProps> = memo(({
       return () => document.removeEventListener('mousedown', handleClickOutside);
     }
   }, [showDropdown]);
+
+  // Close context menu when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (menuRef.current && event.target && event.target instanceof Node && !menuRef.current.contains(event.target)) {
+        setMenuPanelId(null);
+        setMenuPos(null);
+      }
+    };
+    if (menuPanelId) {
+      document.addEventListener('mousedown', handleClickOutside);
+      return () => document.removeEventListener('mousedown', handleClickOutside);
+    }
+  }, [menuPanelId]);
   
   // Focus input when editing starts
   useEffect(() => {
@@ -189,6 +209,14 @@ export const PanelTabBar: React.FC<PanelTabBarProps> = memo(({
                 activePanel?.id === panel.id && "bg-gray-700"
               )}
               onClick={() => !isEditing && handlePanelClick(panel)}
+              onContextMenu={(e) => {
+                // Only tmux tabs: open a simple context menu with Refresh
+                if (panel.type !== 'tmux') return;
+                e.preventDefault();
+                e.stopPropagation();
+                setMenuPanelId(panel.id);
+                setMenuPos({ x: e.clientX, y: e.clientY });
+              }}
               title={isPermanent ? "This panel cannot be closed" : undefined}
             >
               {getPanelIcon(panel.type)}
@@ -278,6 +306,29 @@ export const PanelTabBar: React.FC<PanelTabBarProps> = memo(({
               items={gitBranchActions}
               position="bottom-right"
             />
+          </div>
+        )}
+        {/* Tmux tab context menu */}
+        {menuPanelId && menuPos && (
+          <div
+            ref={menuRef}
+            className="context-menu fixed bg-gray-800 border border-gray-700 rounded shadow-lg py-1 z-50 min-w-[140px]"
+            style={{ top: menuPos.y, left: menuPos.x }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <button
+              className="w-full text-left px-4 py-2 text-sm hover:bg-gray-700"
+              onClick={() => {
+                const sid = sessionContext?.sessionId;
+                if (sid && menuPanelId) {
+                  refreshPanel(sid, menuPanelId);
+                }
+                setMenuPanelId(null);
+                setMenuPos(null);
+              }}
+            >
+              刷新
+            </button>
           </div>
         )}
       </div>

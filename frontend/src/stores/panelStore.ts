@@ -74,6 +74,18 @@ export const usePanelStore = create<PanelStore>()(
       });
     },
 
+    // Renderer-only: bump a nonce on panel state to force React remounts where keyed
+    refreshPanel: (sessionId, panelId) => {
+      set((state) => {
+        const sessionPanels = state.panels[sessionId];
+        if (!sessionPanels) return;
+        const panel = sessionPanels.find((p: ToolPanel) => p.id === panelId);
+        if (!panel) return;
+        const current = panel.state?.renderNonce || 0;
+        panel.state = { ...panel.state, renderNonce: current + 1 } as any;
+      });
+    },
+
     // Getters remain the same
     getSessionPanels: (sessionId) => get().panels[sessionId] || [],
     getActivePanel: (sessionId) => {

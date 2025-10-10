@@ -13,6 +13,8 @@ export interface ToolPanelState {
   isActive: boolean;
   isPinned?: boolean;
   hasBeenViewed?: boolean;       // Track if panel has ever been viewed
+  // Renderer-only refresh nonce to force remount (not persisted)
+  renderNonce?: number;
   customState?: TerminalPanelState | ClaudePanelState | CodexPanelState | DiffPanelState | EditorPanelState | LogsPanelState | DashboardPanelState | SetupTasksPanelState | Record<string, unknown>;
 }
 

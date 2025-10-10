@@ -13,6 +13,8 @@ export interface PanelStore {
   addPanel: (panel: ToolPanel) => void;
   removePanel: (sessionId: string, panelId: string) => void;
   updatePanelState: (panel: ToolPanel) => void;
+  // Force a UI refresh/remount for a specific panel (renderer only)
+  refreshPanel: (sessionId: string, panelId: string) => void;
   
   // Event actions  
   subscribeToPanelEvents: (panelId: string, eventTypes: PanelEventType[]) => void;
