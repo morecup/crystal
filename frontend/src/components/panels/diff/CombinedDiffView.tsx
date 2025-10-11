@@ -134,17 +134,9 @@ const CombinedDiffView: React.FC<CombinedDiffViewProps> = memo(({
             });
           }
           
-          // If no initial selection and session just changed, select all executions by default
+          // 初次进入时，默认选中列表中的第一个项（包括未提交变更）
           if (selectedExecutions.length === 0 && data.length > 0) {
-            // 默认选中“第一个提交”（列表中的第一个非未提交项，通常为最新提交），而不是全部
-            const firstCommit = data.find((exec: ExecutionDiff) => exec.id !== 0);
-            if (firstCommit) {
-              setSelectedExecutions([firstCommit.id]);
-            } else {
-              // 仅存在未提交变更时，选中未提交（id=0）
-              const hasUncommitted = data.some((exec: ExecutionDiff) => exec.id === 0);
-              if (hasUncommitted) setSelectedExecutions([0]);
-            }
+            setSelectedExecutions([data[0].id]);
           }
         } catch (err) {
           setError(err instanceof Error ? err.message : 'Failed to load executions');
