@@ -464,12 +464,14 @@ Co-Authored-By: Crystal <crystal@stravu.com>` : request.message;
           .map(async (entry) => {
             const fullPath = path.join(targetPath, entry.name);
             const relativePath = path.relative(session.worktreePath, fullPath);
+            // Normalize to POSIX-style separators for frontend consistency
+            const relativePathPosix = relativePath.split(path.sep).join('/');
             
             try {
               const stats = await fs.stat(fullPath);
               return {
                 name: entry.name,
-                path: relativePath,
+                path: relativePathPosix,
                 isDirectory: entry.isDirectory(),
                 size: entry.isFile() ? stats.size : undefined,
                 modified: stats.mtime
@@ -478,7 +480,7 @@ Co-Authored-By: Crystal <crystal@stravu.com>` : request.message;
               // Handle broken symlinks or inaccessible files
               return {
                 name: entry.name,
-                path: relativePath,
+                path: relativePathPosix,
                 isDirectory: entry.isDirectory()
               };
             }
@@ -746,11 +748,12 @@ Co-Authored-By: Crystal <crystal@stravu.com>` : request.message;
         files.map(async (file) => {
           const fullPath = path.join(searchDir, file);
           const relativePath = path.relative(searchDirectory, fullPath);
+          const relativePathPosix = relativePath.split(path.sep).join('/');
           
           // Skip worktree directories
           if (
-            relativePath.includes('worktrees/') || relativePath.startsWith('worktrees/') ||
-            relativePath.includes('.worktrees/') || relativePath.startsWith('.worktrees/')
+            relativePathPosix.includes('worktrees/') || relativePathPosix.startsWith('worktrees/') ||
+            relativePathPosix.includes('.worktrees/') || relativePathPosix.startsWith('.worktrees/')
           ) {
             return null;
           }
@@ -771,7 +774,7 @@ Co-Authored-By: Crystal <crystal@stravu.com>` : request.message;
           try {
             const stats = await fs.stat(fullPath);
             return {
-              path: relativePath,
+              path: relativePathPosix,
               isDirectory: stats.isDirectory(),
               name: path.basename(file)
             };

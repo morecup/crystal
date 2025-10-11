@@ -34,10 +34,11 @@ interface FileTreeNodeProps {
   renamingPath: string | null;
   onRenameComplete: (oldPath: string, newName: string) => void;
   onRenameCancel: () => void;
+  hasLoadedChildren: boolean;
 }
 
-function FileTreeNode({ file, level, onFileClick, onRefresh, onDelete, onNewFile, onNewFolder, selectedPath, expandedDirs, onToggleDir, searchQuery, onStartRenaming, renamingPath, onRenameComplete, onRenameCancel, renameValue, onRenameValueChange }: FileTreeNodeProps & { renameValue: string; onRenameValueChange: (value: string) => void }) {
-  const isExpanded = expandedDirs.has(file.path);
+function FileTreeNode({ file, level, onFileClick, onRefresh, onDelete, onNewFile, onNewFolder, selectedPath, expandedDirs, onToggleDir, searchQuery, onStartRenaming, renamingPath, onRenameComplete, onRenameCancel, renameValue, onRenameValueChange, hasLoadedChildren }: FileTreeNodeProps & { renameValue: string; onRenameValueChange: (value: string) => void }) {
+  const isExpanded = expandedDirs.has(file.path) && hasLoadedChildren;
   const isSelected = selectedPath === file.path;
   const isRenaming = renamingPath === file.path;
   const renameInputRef = useRef<HTMLInputElement>(null);
@@ -298,6 +299,13 @@ function FileTree({
   const [renameValue, setRenameValue] = useState('');
   const [newItemParentPath, setNewItemParentPath] = useState('');
   const pendingToggleRef = useRef<string | null>(null);
+  const preSearchExpandedDirsRef = useRef<Set<string> | null>(null);
+
+  // Cross-platform parent path resolver
+  const getParentPath = useCallback((p: string): string => {
+    const parts = p.split(/[\\/]/);
+    return parts.slice(0, -1).join('/') || '';
+  }, []);
 
   const loadFiles = useCallback(async (path: string = '') => {
     setLoading(true);
@@ -372,7 +380,7 @@ function FileTree({
       
       if (result.success) {
         // Refresh the parent directory
-        const parentPath = file.path.split('/').slice(0, -1).join('/') || '';
+        const parentPath = getParentPath(file.path);
         loadFiles(parentPath || '');
         
         // If the deleted file was selected, clear the selection
@@ -386,7 +394,7 @@ function FileTree({
       console.error('Failed to delete:', err);
       setError(err instanceof Error ? err.message : 'Failed to delete item');
     }
-  }, [sessionId, loadFiles, selectedPath, onFileSelect]);
+  }, [sessionId, loadFiles, selectedPath, onFileSelect, getParentPath]);
 
   const handleNewFile = useCallback(() => {
     setNewItemParentPath('');
@@ -451,7 +459,7 @@ function FileTree({
   }, []);
 
   const handleRenameComplete = useCallback(async (oldPath: string, newName: string) => {
-    if (!newName.trim() || newName === oldPath.split('/').pop()) {
+    if (!newName.trim() || newName === oldPath.split(/[\\/]/).pop()) {
       setRenamingPath(null);
       setRenameValue('');
       return;
@@ -459,7 +467,7 @@ function FileTree({
 
     try {
       // Calculate the new path
-      const pathParts = oldPath.split('/');
+      const pathParts = oldPath.split(/[\\/]/);
       pathParts[pathParts.length - 1] = newName.trim();
       const newPath = pathParts.join('/');
 
@@ -467,7 +475,7 @@ function FileTree({
 
       if (result.success) {
         // Refresh parent directory
-        const parentPath = oldPath.split('/').slice(0, -1).join('/') || '';
+        const parentPath = getParentPath(oldPath);
         loadFiles(parentPath || '');
         
         // If the renamed file was selected, clear the selection
@@ -484,7 +492,7 @@ function FileTree({
       setRenamingPath(null);
       setRenameValue('');
     }
-  }, [sessionId, loadFiles, selectedPath, onFileSelect]);
+  }, [sessionId, loadFiles, selectedPath, onFileSelect, getParentPath]);
 
   const handleRenameCancel = useCallback(() => {
     setRenamingPath(null);
@@ -576,6 +584,7 @@ function FileTree({
             onRenameCancel={handleRenameCancel}
             renameValue={renameValue}
             onRenameValueChange={setRenameValue}
+            hasLoadedChildren={files.has(file.path)}
           />
           {file.isDirectory && expandedDirs.has(file.path) && (
             <div onClick={(e) => e.stopPropagation()} style={{ minHeight: '1px' }}>
@@ -586,9 +595,12 @@ function FileTree({
       ));
   };
 
-  // Auto-expand directories when searching
+  // Auto-expand directories when searching (save and restore previous state)
   useEffect(() => {
     if (searchQuery) {
+      if (!preSearchExpandedDirsRef.current) {
+        preSearchExpandedDirsRef.current = new Set(expandedDirs);
+      }
       // Expand all directories to show search results
       const allDirs = new Set<string>(['']);
       files.forEach((items, dirPath) => {
@@ -600,9 +612,13 @@ function FileTree({
         });
       });
       setExpandedDirs(allDirs);
+    } else {
+      if (preSearchExpandedDirsRef.current) {
+        setExpandedDirs(preSearchExpandedDirsRef.current);
+        preSearchExpandedDirsRef.current = null;
+      }
     }
-    // Note: We don't collapse when search is cleared to preserve user's expanded state
-  }, [searchQuery, files]);
+  }, [searchQuery, files, expandedDirs]);
 
   // Focus search input when shown
   useEffect(() => {
