@@ -55,6 +55,8 @@ export const MonacoDiffViewer: React.FC<MonacoDiffViewerProps> = ({
   const [configuredVsPath, setConfiguredVsPath] = useState<string | null>(null);
   // No dynamic React key for manual editor instance
   const isDisposingRef = useRef<boolean>(false);
+  // Track editor focus to properly route undo/redo keystrokes
+  const isEditorFocusedRef = useRef<boolean>(false);
   
   // Check if this is a markdown file
   const isMarkdownFile = useMemo(() => {
@@ -204,12 +206,20 @@ export const MonacoDiffViewer: React.FC<MonacoDiffViewerProps> = ({
         // Change events and save shortcut
         const disposables: IDisposable[] = [];
         const modifiedEditor = editor.getModifiedEditor();
+        // Track focus state for shortcut routing
+        try {
+          modifiedEditor.onDidFocusEditorText?.(() => { isEditorFocusedRef.current = true; });
+          modifiedEditor.onDidBlurEditorText?.(() => { isEditorFocusedRef.current = false; });
+        } catch {}
         if (!isReadOnly) {
           const d = modifiedEditor.onDidChangeModelContent(() => {
             if (isDisposingRef.current || !modifiedEditor.getModel()) return;
             try {
               const newContent = modifiedEditor.getValue();
-              setCurrentContent(newContent);
+              // Only update React state when needed (avoid re-render jitter)
+              if (isMarkdownFile && viewMode !== 'diff') {
+                setCurrentContent(newContent);
+              }
               setTimeout(() => { calculateEditorHeight(); }, 50);
               if (isProgrammaticUpdateRef.current) return;
               if (newContent !== file.newValue) {
@@ -265,16 +275,37 @@ export const MonacoDiffViewer: React.FC<MonacoDiffViewerProps> = ({
       padding: { bottom: 100 }
     });
 
-    // Programmatic update of model contents
+    // Programmatic update of model contents with minimal disruption
     isProgrammaticUpdateRef.current = true;
     const lang = getLanguage(file.path);
     const orig = originalModelRef.current;
     const mod = modifiedModelRef.current;
     if (orig && orig.getLanguageId() !== lang) m.editor.setModelLanguage(orig, lang);
     if (mod && mod.getLanguageId() !== lang) m.editor.setModelLanguage(mod, lang);
-    orig?.setValue(file.oldValue || '');
-    mod?.setValue(file.newValue || '');
-    setCurrentContent(file.newValue || '');
+
+    // Only set values when they actually differ to avoid resetting undo stack and scroll
+    const currentOrig = orig?.getValue() ?? '';
+    const desiredOrig = file.oldValue || '';
+    if (orig && currentOrig !== desiredOrig) {
+      orig.setValue(desiredOrig);
+    }
+
+    const currentMod = mod?.getValue() ?? '';
+    const desiredMod = file.newValue || '';
+    if (mod && currentMod !== desiredMod) {
+      // Preserve view state to avoid visible scroll jumps
+      const modifiedEditor = editor.getModifiedEditor();
+      let viewState: monaco.editor.ICodeEditorViewState | null = null;
+      try { viewState = modifiedEditor.saveViewState?.() || null; } catch { viewState = null; }
+      mod.setValue(desiredMod);
+      try { if (viewState) modifiedEditor.restoreViewState?.(viewState); } catch {}
+    }
+
+    // Keep current content for markdown preview only
+    if (isMarkdownFile && viewMode !== 'diff') {
+      setCurrentContent(file.newValue || '');
+    }
+
     setTimeout(() => {
       isProgrammaticUpdateRef.current = false;
       if (!isDisposingRef.current) {
@@ -282,7 +313,7 @@ export const MonacoDiffViewer: React.FC<MonacoDiffViewerProps> = ({
         try { editor.layout(); } catch {}
       }
     }, 100);
-  }, [file.path, file.oldValue, file.newValue, isDarkMode, isReadOnly, viewType]);
+  }, [file.path, file.oldValue, file.newValue, isDarkMode, isReadOnly, viewType, isMarkdownFile, viewMode]);
 
   // Get file extension for language detection
   const getLanguage = (filePath: string): string => {
@@ -538,6 +569,27 @@ export const MonacoDiffViewer: React.FC<MonacoDiffViewerProps> = ({
       window.removeEventListener('session-switched', handleSessionSwitch);
     };
   }, []); // Empty deps - only create once
+
+  // Ensure undo/redo shortcuts are handled by Monaco when the editor is focused
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (!isEditorFocusedRef.current) return;
+      const isUndo = (e.ctrlKey || e.metaKey) && !e.shiftKey && (e.key === 'z' || e.key === 'Z');
+      const isRedo = (e.ctrlKey || e.metaKey) && e.shiftKey && (e.key === 'z' || e.key === 'Z');
+      if (isUndo || isRedo) {
+        e.preventDefault();
+        e.stopPropagation();
+        try {
+          const editor = editorRef.current?.getModifiedEditor();
+          if (editor) {
+            editor.trigger('keyboard', isUndo ? 'undo' : 'redo', {});
+          }
+        } catch {}
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown, { capture: true });
+    return () => window.removeEventListener('keydown', handleKeyDown, { capture: true } as unknown as EventListenerOptions);
+  }, []);
   
   // Cleanup on unmount or when key props change
   useEffect(() => {
