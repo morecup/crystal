@@ -1,5 +1,5 @@
 import React, { memo } from 'react';
-import { FileText, FileCode, FileImage, File, Trash2 } from 'lucide-react';
+import { FileText, FileCode, FileImage, File, Trash2, RotateCcw } from 'lucide-react';
 import { IconButton } from './ui/IconButton';
 import { cn } from '../utils/cn';
 
@@ -15,6 +15,7 @@ interface FileListProps {
   files: FileInfo[];
   onFileClick: (filePath: string, index: number) => void;
   onFileDelete?: (filePath: string) => void;
+  onFileRestore?: (filePath: string) => void;
   selectedFile?: string;
 }
 
@@ -72,7 +73,7 @@ const getTypeLabel = (type: FileInfo['type']) => {
   }
 };
 
-export const FileList: React.FC<FileListProps> = memo(({ files, onFileClick, onFileDelete, selectedFile }) => {
+export const FileList: React.FC<FileListProps> = memo(({ files, onFileClick, onFileDelete, onFileRestore, selectedFile }) => {
   if (files.length === 0) {
     return (
       <div className="p-4 text-center text-text-tertiary text-sm">
@@ -122,6 +123,27 @@ export const FileList: React.FC<FileListProps> = memo(({ files, onFileClick, onF
                   <span className="text-xs text-status-error">
                     -{file.deletions}
                   </span>
+                )}
+                {onFileRestore && (
+                  <IconButton
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      const action = file.type === 'added'
+                        ? 'This will delete the new file'
+                        : file.type === 'deleted'
+                          ? 'This will restore the deleted file from HEAD'
+                          : 'This will discard local modifications';
+                      if (window.confirm(`Rollback changes to ${file.path}?\n\n${action}.`)) {
+                        onFileRestore(file.path);
+                      }
+                    }}
+                    variant="ghost"
+                    size="sm"
+                    className="opacity-0 group-hover:opacity-100 transition-opacity"
+                    aria-label="Rollback file"
+                    title="Rollback this file (discard local changes)"
+                    icon={<RotateCcw className="w-4 h-4" />}
+                  />
                 )}
                 {onFileDelete && (
                   <IconButton

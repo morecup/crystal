@@ -517,6 +517,47 @@ const CombinedDiffView: React.FC<CombinedDiffViewProps> = memo(({
     }
   }, [sessionId, selectedExecutions, executions.length]);
 
+  const handleFileRestore = useCallback(async (filePath: string) => {
+    try {
+      const result = await window.electronAPI.invoke('git:restore-file', {
+        sessionId,
+        filePath
+      });
+
+      if (!result.success) {
+        throw new Error(result.error || 'Failed to rollback file');
+      }
+
+      // Refresh executions and diff to reflect changes
+      const response = await API.sessions.getExecutions(sessionId);
+      if (response.success) {
+        setExecutions(response.data);
+      }
+
+      if (selectedExecutions.length > 0) {
+        let diffResponse;
+        if (selectedExecutions.length === 1 && selectedExecutions[0] === 0) {
+          diffResponse = await API.sessions.getCombinedDiff(sessionId, [0]);
+        } else if (selectedExecutions.length === executions.length) {
+          diffResponse = await API.sessions.getCombinedDiff(sessionId);
+        } else {
+          diffResponse = await API.sessions.getCombinedDiff(sessionId, selectedExecutions);
+        }
+        if (diffResponse.success) {
+          setCombinedDiff(diffResponse.data);
+        }
+      }
+
+      // Notify editor panels to reload from disk
+      window.dispatchEvent(new CustomEvent('git-restore-completed', {
+        detail: { sessionId }
+      }));
+    } catch (err) {
+      console.error('Error rolling back file:', err);
+      alert(`Failed to rollback file: ${err instanceof Error ? err.message : 'Unknown error'}`);
+    }
+  }, [sessionId, selectedExecutions, executions.length]);
+
   const handleRestore = useCallback(async () => {
     if (!window.confirm('Are you sure you want to restore all uncommitted changes? This will discard all your local modifications.')) {
       return;
@@ -655,6 +696,7 @@ const CombinedDiffView: React.FC<CombinedDiffViewProps> = memo(({
                       files={filesFromDiff}
                       onFileClick={handleFileClick}
                       onFileDelete={handleFileDelete}
+                      onFileRestore={selectedExecutions.length === 1 && selectedExecutions[0] === 0 ? handleFileRestore : undefined}
                       selectedFile={selectedFile}
                     />
                   </div>

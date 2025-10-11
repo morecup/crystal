@@ -376,6 +376,100 @@ Co-Authored-By: Crystal <crystal@stravu.com>` : request.message;
     }
   });
 
+  // Restore a single file to HEAD (discard local changes for that file)
+  ipcMain.handle('git:restore-file', async (_, request: { sessionId: string; filePath: string }) => {
+    try {
+      const session = sessionManager.getSession(request.sessionId);
+      if (!session) {
+        throw new Error(`Session not found: ${request.sessionId}`);
+      }
+
+      if (!request.filePath) {
+        throw new Error('File path is required');
+      }
+
+      // Ensure the file path is relative and safe
+      const normalizedPath = path.normalize(request.filePath);
+      if (normalizedPath.startsWith('..') || path.isAbsolute(normalizedPath)) {
+        throw new Error('Invalid file path');
+      }
+
+      const fullPath = path.join(session.worktreePath, normalizedPath);
+
+      // Verify path is within worktree (resolve symlinks when possible)
+      const resolvedWorktreePath = await fs.realpath(session.worktreePath).catch(() => session.worktreePath);
+      let resolvedTargetPath = fullPath;
+      try {
+        resolvedTargetPath = await fs.realpath(fullPath);
+      } catch {
+        // File might not exist (e.g., it was deleted) – still allow restore
+        resolvedTargetPath = fullPath;
+      }
+      if (!resolvedTargetPath.startsWith(resolvedWorktreePath) && !fullPath.startsWith(session.worktreePath)) {
+        throw new Error('File path is outside worktree');
+      }
+
+      const { exec } = require('child_process');
+      const { promisify } = require('util');
+      const execAsync = promisify(exec);
+
+      // Use POSIX path for git and quote it safely
+      const gitPath = normalizedPath.split(path.sep).join('/');
+      const quotedPath = `"${gitPath.replace(/"/g, '\\"')}"`;
+
+      try {
+        // Check if file is tracked
+        let isTracked = false;
+        try {
+          await execAsync(`git ls-files --error-unmatch ${quotedPath}`, { cwd: session.worktreePath });
+          isTracked = true;
+        } catch {
+          isTracked = false;
+        }
+
+        if (isTracked) {
+          // Prefer modern restore; fallback to checkout if unavailable
+          try {
+            await execAsync(`git restore --source=HEAD --staged --worktree -- ${quotedPath}`, { cwd: session.worktreePath });
+          } catch (restoreErr) {
+            // Fallback sequence for older git versions
+            try {
+              await execAsync(`git checkout -- ${quotedPath}`, { cwd: session.worktreePath });
+              // Also unstage if needed
+              try { await execAsync(`git reset HEAD -- ${quotedPath}`, { cwd: session.worktreePath }); } catch {}
+            } catch {
+              throw restoreErr;
+            }
+          }
+        } else {
+          // Untracked file/folder: remove from disk
+          try {
+            const stat = await fs.stat(fullPath);
+            if (stat.isDirectory()) {
+              await fs.rm(fullPath, { recursive: true, force: true });
+            } else {
+              await fs.unlink(fullPath);
+            }
+          } catch (fsErr) {
+            // If it doesn't exist, nothing to do; otherwise rethrow
+            const code = (fsErr as NodeJS.ErrnoException).code;
+            if (code !== 'ENOENT') throw fsErr;
+          }
+        }
+
+        return { success: true };
+      } catch (error: unknown) {
+        throw new Error(`Git restore-file failed: ${error instanceof Error ? error.message : error}`);
+      }
+    } catch (error) {
+      console.error('Error restoring file:', error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Unknown error'
+      };
+    }
+  });
+
   // Read file contents at a specific git revision
   ipcMain.handle('file:readAtRevision', async (_, request: { sessionId: string; filePath: string; revision?: string }) => {
     try {
