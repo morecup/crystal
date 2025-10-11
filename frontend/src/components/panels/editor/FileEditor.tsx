@@ -24,15 +24,23 @@ interface FileTreeNodeProps {
   onFileClick: (file: FileItem) => void;
   onRefresh: (path: string) => void;
   onDelete: (file: FileItem) => void;
+  onNewFile: (parentPath: string) => void;
+  onNewFolder: (parentPath: string) => void;
   selectedPath: string | null;
   expandedDirs: Set<string>;
   onToggleDir: (path: string) => void;
   searchQuery?: string;
+  onStartRenaming: (file: FileItem) => void;
+  renamingPath: string | null;
+  onRenameComplete: (oldPath: string, newName: string) => void;
+  onRenameCancel: () => void;
 }
 
-function FileTreeNode({ file, level, onFileClick, onRefresh, onDelete, selectedPath, expandedDirs, onToggleDir, searchQuery }: FileTreeNodeProps) {
+function FileTreeNode({ file, level, onFileClick, onRefresh, onDelete, onNewFile, onNewFolder, selectedPath, expandedDirs, onToggleDir, searchQuery, onStartRenaming, renamingPath, onRenameComplete, onRenameCancel, renameValue, onRenameValueChange }: FileTreeNodeProps & { renameValue: string; onRenameValueChange: (value: string) => void }) {
   const isExpanded = expandedDirs.has(file.path);
   const isSelected = selectedPath === file.path;
+  const isRenaming = renamingPath === file.path;
+  const renameInputRef = useRef<HTMLInputElement>(null);
 
   const handleClick = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -53,6 +61,111 @@ function FileTreeNode({ file, level, onFileClick, onRefresh, onDelete, selectedP
     e.stopPropagation();
     onDelete(file);
   };
+
+  const handleRename = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    onStartRenaming(file);
+    onRenameValueChange(file.name);
+  };
+
+  const handleContextMenu = (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+
+    // Create context menu
+    const menuItems = [];
+    
+    if (file.isDirectory) {
+      menuItems.push({
+        label: 'New File',
+        action: () => onNewFile(file.path)
+      });
+      menuItems.push({
+        label: 'New Folder',
+        action: () => onNewFolder(file.path)
+      });
+      menuItems.push(null); // Separator
+    }
+    
+    menuItems.push({
+      label: 'Rename',
+      action: () => onStartRenaming(file)
+    });
+    
+    menuItems.push({
+      label: `Delete ${file.isDirectory ? 'Folder' : 'File'}`,
+      action: () => onDelete(file),
+      danger: true
+    });
+
+    // Create and show context menu
+    const menu = document.createElement('div');
+    menu.className = 'fixed bg-surface-primary border border-border-primary rounded-md shadow-lg py-1 z-50 min-w-[150px]';
+    menu.style.left = `${e.clientX}px`;
+    menu.style.top = `${e.clientY}px`;
+
+    menuItems.forEach((item) => {
+      if (item === null) {
+        const separator = document.createElement('div');
+        separator.className = 'border-t border-border-primary my-1';
+        menu.appendChild(separator);
+        return;
+      }
+
+      const menuItem = document.createElement('div');
+      menuItem.className = `px-3 py-2 text-sm cursor-pointer hover:bg-surface-hover ${
+        item?.danger ? 'text-status-error hover:bg-status-error/10' : 'text-text-primary'
+      }`;
+      menuItem.textContent = item?.label || '';
+      menuItem.onclick = () => {
+        item?.action();
+        document.body.removeChild(menu);
+      };
+
+      menu.appendChild(menuItem);
+    });
+
+    document.body.appendChild(menu);
+
+    // Remove menu when clicking outside
+    const removeMenu = (e: MouseEvent) => {
+      if (!menu.contains(e.target as Node)) {
+        document.body.removeChild(menu);
+        document.removeEventListener('click', removeMenu);
+      }
+    };
+
+    // Use setTimeout to avoid immediate trigger
+    setTimeout(() => {
+      document.addEventListener('click', removeMenu);
+    }, 0);
+  };
+
+  const handleRenameSubmit = () => {
+    if (renameValue.trim() && renameValue !== file.name) {
+      onRenameComplete(file.path, renameValue.trim());
+    } else {
+      onRenameCancel();
+    }
+  };
+
+  const handleRenameKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      handleRenameSubmit();
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      onRenameCancel();
+    }
+  };
+
+  // Focus rename input when renaming starts
+  useEffect(() => {
+    if (isRenaming && renameInputRef.current) {
+      renameInputRef.current.focus();
+      renameInputRef.current.select();
+    }
+  }, [isRenaming]);
 
   // Highlight matching text
   const highlightText = (text: string) => {
@@ -85,6 +198,7 @@ function FileTreeNode({ file, level, onFileClick, onRefresh, onDelete, selectedP
         style={{ paddingLeft: `${level * 16 + 8}px` }}
         onClick={handleClick}
         onDoubleClick={(e) => e.preventDefault()}
+        onContextMenu={handleContextMenu}
       >
         {file.isDirectory ? (
           <>
@@ -101,8 +215,21 @@ function FileTreeNode({ file, level, onFileClick, onRefresh, onDelete, selectedP
             <File className="w-4 h-4 mr-2 text-text-tertiary" />
           </>
         )}
-        <span className="flex-1 text-sm truncate text-text-primary">{highlightText(file.name)}</span>
-        {file.isDirectory && (
+        {isRenaming ? (
+          <input
+            ref={renameInputRef}
+            type="text"
+            value={renameValue}
+            onChange={(e) => onRenameValueChange(e.target.value)}
+            onKeyDown={handleRenameKeyDown}
+            onBlur={handleRenameSubmit}
+            className="flex-1 px-1 py-0 bg-surface-primary border border-interactive rounded text-sm text-text-primary focus:outline-none focus:ring-1 focus:ring-interactive"
+            style={{ minWidth: '100px' }}
+          />
+        ) : (
+          <span className="flex-1 text-sm truncate text-text-primary">{highlightText(file.name)}</span>
+        )}
+        {!isRenaming && file.isDirectory && (
           <button
             onClick={handleRefresh}
             className="opacity-0 group-hover:opacity-100 p-1 hover:bg-surface-hover rounded text-text-tertiary hover:text-text-primary"
@@ -111,13 +238,26 @@ function FileTreeNode({ file, level, onFileClick, onRefresh, onDelete, selectedP
             <RefreshCw className="w-3 h-3" />
           </button>
         )}
-        <button
-          onClick={handleDelete}
-          className="opacity-0 group-hover:opacity-100 p-1 hover:bg-surface-hover rounded ml-1"
-          title={`Delete ${file.isDirectory ? 'folder' : 'file'}`}
-        >
-          <Trash2 className="w-3 h-3 text-status-error" />
-        </button>
+        {!isRenaming && (
+          <button
+            onClick={handleRename}
+            className="opacity-0 group-hover:opacity-100 p-1 hover:bg-surface-hover rounded ml-1 text-text-tertiary hover:text-text-primary"
+            title="Rename"
+          >
+            <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
+            </svg>
+          </button>
+        )}
+        {!isRenaming && (
+          <button
+            onClick={handleDelete}
+            className="opacity-0 group-hover:opacity-100 p-1 hover:bg-surface-hover rounded ml-1"
+            title={`Delete ${file.isDirectory ? 'folder' : 'file'}`}
+          >
+            <Trash2 className="w-3 h-3 text-status-error" />
+          </button>
+        )}
       </div>
     </div>
   );
@@ -144,7 +284,7 @@ function FileTree({
 }: FileTreeProps) {
   const [files, setFiles] = useState<Map<string, FileItem[]>>(new Map());
   const [expandedDirs, setExpandedDirs] = useState<Set<string>>(
-    new Set(initialExpandedDirs || [''])
+    new Set(initialExpandedDirs || [])
   );
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -154,6 +294,9 @@ function FileTree({
   const [showNewItemDialog, setShowNewItemDialog] = useState<'file' | 'folder' | null>(null);
   const [newItemName, setNewItemName] = useState('');
   const newItemInputRef = useRef<HTMLInputElement>(null);
+  const [renamingPath, setRenamingPath] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState('');
+  const [newItemParentPath, setNewItemParentPath] = useState('');
   const pendingToggleRef = useRef<string | null>(null);
 
   const loadFiles = useCallback(async (path: string = '') => {
@@ -200,10 +343,8 @@ function FileTree({
         } else {
           next.add(path);
           console.log('Expanded:', path);
-          // Load files immediately if needed
-          if (!files.has(path)) {
-            loadFiles(path);
-          }
+          // Always refresh files when expanding folder
+          loadFiles(path);
         }
         return next;
       });
@@ -227,15 +368,12 @@ function FileTree({
     }
 
     try {
-      const result = await window.electronAPI.invoke('file:delete', {
-        sessionId,
-        filePath: file.path
-      });
+      const result = await window.electronAPI.invoke('file:delete', { sessionId, filePath: file.path });
       
       if (result.success) {
         // Refresh the parent directory
         const parentPath = file.path.split('/').slice(0, -1).join('/') || '';
-        loadFiles(parentPath);
+        loadFiles(parentPath || '');
         
         // If the deleted file was selected, clear the selection
         if (selectedPath === file.path) {
@@ -251,11 +389,13 @@ function FileTree({
   }, [sessionId, loadFiles, selectedPath, onFileSelect]);
 
   const handleNewFile = useCallback(() => {
+    setNewItemParentPath('');
     setShowNewItemDialog('file');
     setNewItemName('');
   }, []);
 
   const handleNewFolder = useCallback(() => {
+    setNewItemParentPath('');
     setShowNewItemDialog('folder');
     setNewItemName('');
   }, []);
@@ -265,26 +405,103 @@ function FileTree({
 
     try {
       const isFolder = showNewItemDialog === 'folder';
-      const filePath = isFolder ? `${newItemName}/.gitkeep` : newItemName;
+      const parentPath = newItemParentPath.trim();
+      const fileName = newItemName.trim();
       
-      const result = await window.electronAPI.invoke('file:write', {
-        sessionId,
-        filePath,
-        content: ''
-      });
-
-      if (result.success) {
-        loadFiles('');
-        setShowNewItemDialog(null);
-        setNewItemName('');
+      // Build the full path
+      const filePath = parentPath ? `${parentPath}/${fileName}` : fileName;
+      
+      if (isFolder) {
+        // For folders, create the directory with a .gitkeep file
+        const folderPath = filePath.endsWith('/') ? filePath.slice(0, -1) : filePath;
+        const result = await window.electronAPI.invoke('file:write', { sessionId, filePath: `${folderPath}/.gitkeep`, content: '' });
+        
+        if (result.success) {
+          // Refresh the parent directory
+          loadFiles(parentPath || '');
+          setShowNewItemDialog(null);
+          setNewItemName('');
+          setNewItemParentPath('');
+        } else {
+          setError(`Failed to create folder: ${result.error}`);
+        }
       } else {
-        setError(`Failed to create ${isFolder ? 'folder' : 'file'}: ${result.error}`);
+        // For files, create the file directly
+        const result = await window.electronAPI.invoke('file:write', { sessionId, filePath, content: '' });
+        
+        if (result.success) {
+          // Refresh the parent directory
+          loadFiles(parentPath || '');
+          setShowNewItemDialog(null);
+          setNewItemName('');
+          setNewItemParentPath('');
+        } else {
+          setError(`Failed to create file: ${result.error}`);
+        }
       }
     } catch (err) {
       console.error('Failed to create item:', err);
       setError(err instanceof Error ? err.message : 'Failed to create item');
     }
-  }, [sessionId, loadFiles, newItemName, showNewItemDialog]);
+  }, [sessionId, loadFiles, newItemName, showNewItemDialog, newItemParentPath]);
+
+  const handleStartRenaming = useCallback((file: FileItem) => {
+    setRenamingPath(file.path);
+    setRenameValue(file.name);
+  }, []);
+
+  const handleRenameComplete = useCallback(async (oldPath: string, newName: string) => {
+    if (!newName.trim() || newName === oldPath.split('/').pop()) {
+      setRenamingPath(null);
+      setRenameValue('');
+      return;
+    }
+
+    try {
+      // Calculate the new path
+      const pathParts = oldPath.split('/');
+      pathParts[pathParts.length - 1] = newName.trim();
+      const newPath = pathParts.join('/');
+
+      const result = await window.electronAPI.invoke('file:rename', { sessionId, oldPath, newPath });
+
+      if (result.success) {
+        // Refresh parent directory
+        const parentPath = oldPath.split('/').slice(0, -1).join('/') || '';
+        loadFiles(parentPath || '');
+        
+        // If the renamed file was selected, clear the selection
+        if (selectedPath === oldPath) {
+          onFileSelect(null);
+        }
+      } else {
+        setError(`Failed to rename: ${result.error}`);
+      }
+    } catch (err) {
+      console.error('Failed to rename:', err);
+      setError(err instanceof Error ? err.message : 'Failed to rename item');
+    } finally {
+      setRenamingPath(null);
+      setRenameValue('');
+    }
+  }, [sessionId, loadFiles, selectedPath, onFileSelect]);
+
+  const handleRenameCancel = useCallback(() => {
+    setRenamingPath(null);
+    setRenameValue('');
+  }, []);
+
+  const handleNewFileInFolder = useCallback((parentPath: string) => {
+    setNewItemParentPath(parentPath || '');
+    setShowNewItemDialog('file');
+    setNewItemName('');
+  }, []);
+
+  const handleNewFolderInFolder = useCallback((parentPath: string) => {
+    setNewItemParentPath(parentPath || '');
+    setShowNewItemDialog('folder');
+    setNewItemName('');
+  }, []);
 
   // Focus input when dialog is shown
   useEffect(() => {
@@ -346,10 +563,19 @@ function FileTree({
             onFileClick={onFileSelect}
             onRefresh={loadFiles}
             onDelete={handleDelete}
+            
+            onNewFile={handleNewFileInFolder}
+            onNewFolder={handleNewFolderInFolder}
             selectedPath={selectedPath}
             expandedDirs={expandedDirs}
             onToggleDir={toggleDir}
             searchQuery={searchQuery}
+            onStartRenaming={handleStartRenaming}
+            renamingPath={renamingPath}
+            onRenameComplete={handleRenameComplete}
+            onRenameCancel={handleRenameCancel}
+            renameValue={renameValue}
+            onRenameValueChange={setRenameValue}
           />
           {file.isDirectory && expandedDirs.has(file.path) && (
             <div onClick={(e) => e.stopPropagation()} style={{ minHeight: '1px' }}>
@@ -425,10 +651,15 @@ function FileTree({
       
       // ESC key handling
       if (e.key === 'Escape') {
+        // Cancel renaming if active
+        if (renamingPath) {
+          handleRenameCancel();
+        }
         // Close new item dialog if open
-        if (showNewItemDialog) {
+        else if (showNewItemDialog) {
           setShowNewItemDialog(null);
           setNewItemName('');
+          setNewItemParentPath('');
         }
         // Clear search if active
         else if (searchQuery) {
@@ -516,33 +747,50 @@ function FileTree({
         </div>
       )}
       {showNewItemDialog && (
-        <div className="p-2 border-b border-border-primary bg-surface-secondary">
-          <form onSubmit={(e) => { e.preventDefault(); handleCreateNewItem(); }}>
-            <div className="flex items-center gap-2">
-              <input
-                ref={newItemInputRef}
-                type="text"
-                value={newItemName}
-                onChange={(e) => setNewItemName(e.target.value)}
-                placeholder={`Enter ${showNewItemDialog} name...`}
-                className="flex-1 px-2 py-1 bg-surface-primary border border-border-primary rounded text-sm text-text-primary placeholder-text-tertiary focus:outline-none focus:border-interactive focus:ring-1 focus:ring-interactive"
-              />
-              <button
-                type="submit"
-                disabled={!newItemName.trim()}
-                className="px-3 py-1 bg-interactive hover:bg-interactive-hover disabled:bg-surface-tertiary disabled:text-text-tertiary text-white rounded text-sm transition-colors"
-              >
-                Create
-              </button>
-              <button
-                type="button"
-                onClick={() => { setShowNewItemDialog(null); setNewItemName(''); }}
-                className="px-3 py-1 bg-surface-tertiary hover:bg-surface-hover text-text-secondary rounded text-sm transition-colors"
-              >
-                Cancel
-              </button>
-            </div>
-          </form>
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-surface-primary border border-border-primary rounded-lg shadow-xl p-6 min-w-[400px] max-w-[90vw]">
+            <h3 className="text-lg font-medium text-text-primary mb-4">
+              Create New {showNewItemDialog === 'folder' ? 'Folder' : 'File'}
+              {newItemParentPath && (
+                <span className="text-sm text-text-secondary ml-2">
+                  in: {newItemParentPath}
+                </span>
+              )}
+            </h3>
+            <form onSubmit={(e) => { e.preventDefault(); handleCreateNewItem(); }}>
+              <div className="flex flex-col gap-4">
+                <input
+                  ref={newItemInputRef}
+                  type="text"
+                  value={newItemName}
+                  onChange={(e) => setNewItemName(e.target.value)}
+                  placeholder={`Enter ${showNewItemDialog === 'folder' ? 'folder' : 'file'} name...`}
+                  className="px-3 py-2 bg-surface-primary border border-border-primary rounded text-sm text-text-primary placeholder-text-tertiary focus:outline-none focus:border-interactive focus:ring-1 focus:ring-interactive"
+                  autoFocus
+                />
+                <div className="flex gap-2 justify-end">
+                  <button
+                    type="button"
+                    onClick={() => { 
+                      setShowNewItemDialog(null); 
+                      setNewItemName(''); 
+                      setNewItemParentPath('');
+                    }}
+                    className="px-4 py-2 bg-surface-tertiary hover:bg-surface-hover text-text-secondary rounded text-sm transition-colors"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={!newItemName.trim()}
+                    className="px-4 py-2 bg-interactive hover:bg-interactive-hover disabled:bg-surface-tertiary disabled:text-text-tertiary text-white rounded text-sm transition-colors"
+                  >
+                    Create {showNewItemDialog === 'folder' ? 'Folder' : 'File'}
+                  </button>
+                </div>
+              </div>
+            </form>
+          </div>
         </div>
       )}
       {error && (

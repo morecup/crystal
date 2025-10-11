@@ -32,6 +32,12 @@ interface FileDeleteRequest {
   filePath: string;
 }
 
+interface FileRenameRequest {
+  sessionId: string;
+  oldPath: string;
+  newPath: string;
+}
+
 interface FileItem {
   name: string;
   path: string;
@@ -545,6 +551,91 @@ Co-Authored-By: Crystal <crystal@stravu.com>` : request.message;
       return { success: true };
     } catch (error) {
       console.error('Error deleting file:', error);
+      return { 
+        success: false, 
+        error: error instanceof Error ? error.message : 'Unknown error' 
+      };
+    }
+  });
+
+  // Rename a file or directory in a session's worktree
+  ipcMain.handle('file:rename', async (_, request: FileRenameRequest) => {
+    try {
+      const session = sessionManager.getSession(request.sessionId);
+      if (!session) {
+        throw new Error(`Session not found: ${request.sessionId}`);
+      }
+
+      // Ensure the old path is relative and safe
+      const normalizedOldPath = path.normalize(request.oldPath);
+      if (normalizedOldPath.startsWith('..') || path.isAbsolute(normalizedOldPath)) {
+        throw new Error('Invalid old file path');
+      }
+
+      // Ensure the new path is relative and safe
+      const normalizedNewPath = path.normalize(request.newPath);
+      if (normalizedNewPath.startsWith('..') || path.isAbsolute(normalizedNewPath)) {
+        throw new Error('Invalid new file path');
+      }
+
+      const fullOldPath = path.join(session.worktreePath, normalizedOldPath);
+      const fullNewPath = path.join(session.worktreePath, normalizedNewPath);
+      
+      // Verify the old path is within the worktree
+      const resolvedWorktreePath = await fs.realpath(session.worktreePath).catch(() => session.worktreePath);
+      
+      // Check if the old file exists and resolve its path
+      let resolvedOldPath: string;
+      try {
+        resolvedOldPath = await fs.realpath(fullOldPath);
+      } catch (err) {
+        throw new Error(`File not found: ${normalizedOldPath}`);
+      }
+      
+      // Check if the resolved old path is within the worktree
+      if (!resolvedOldPath.startsWith(resolvedWorktreePath)) {
+        throw new Error('Old file path is outside worktree');
+      }
+
+      // Verify the new path is within the worktree
+      const newDirPath = path.dirname(fullNewPath);
+      let resolvedNewDirPath = newDirPath;
+      try {
+        resolvedNewDirPath = await fs.realpath(newDirPath);
+      } catch {
+        // New directory might not exist, check parent
+        const parentPath = path.dirname(newDirPath);
+        if (parentPath === session.worktreePath || parentPath.startsWith(resolvedWorktreePath)) {
+          resolvedNewDirPath = newDirPath;
+        } else {
+          throw new Error('New file path is outside worktree');
+        }
+      }
+      
+      if (!resolvedNewDirPath.startsWith(resolvedWorktreePath) && !newDirPath.startsWith(session.worktreePath)) {
+        throw new Error('New file path is outside worktree');
+      }
+
+      // Check if new path already exists
+      try {
+        await fs.access(fullNewPath);
+        throw new Error('Destination already exists');
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+          throw err;
+        }
+        // ENOENT is expected - file doesn't exist yet
+      }
+
+      // Ensure the new directory exists
+      await fs.mkdir(newDirPath, { recursive: true });
+
+      // Rename/move the file or directory
+      await fs.rename(resolvedOldPath, fullNewPath);
+      
+      return { success: true };
+    } catch (error) {
+      console.error('Error renaming file:', error);
       return { 
         success: false, 
         error: error instanceof Error ? error.message : 'Unknown error' 

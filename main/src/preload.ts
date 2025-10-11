@@ -291,6 +291,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
     listProject: (projectId: number, path?: string): Promise<IPCResponse> => ipcRenderer.invoke('file:list-project', { projectId, path }),
     readProject: (projectId: number, filePath: string): Promise<IPCResponse> => ipcRenderer.invoke('file:read-project', { projectId, filePath }),
     writeProject: (projectId: number, filePath: string, content: string): Promise<IPCResponse> => ipcRenderer.invoke('file:write-project', { projectId, filePath, content }),
+    list: (sessionId: string, path?: string): Promise<IPCResponse> => ipcRenderer.invoke('file:list', { sessionId, path }),
+    read: (sessionId: string, filePath: string): Promise<IPCResponse> => ipcRenderer.invoke('file:read', { sessionId, filePath }),
+    write: (sessionId: string, filePath: string, content: string): Promise<IPCResponse> => ipcRenderer.invoke('file:write', { sessionId, filePath, content }),
+    delete: (sessionId: string, filePath: string): Promise<IPCResponse> => ipcRenderer.invoke('file:delete', { sessionId, filePath }),
+    rename: (sessionId: string, oldPath: string, newPath: string): Promise<IPCResponse> => ipcRenderer.invoke('file:rename', { sessionId, oldPath, newPath }),
   },
 
   // Dialog
