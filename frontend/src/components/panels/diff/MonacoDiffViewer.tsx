@@ -36,6 +36,9 @@ export const MonacoDiffViewer: React.FC<MonacoDiffViewerProps> = ({
   const monacoRef = useRef<typeof monaco | null>(null);
   const originalModelRef = useRef<monaco.editor.ITextModel | null>(null);
   const modifiedModelRef = useRef<monaco.editor.ITextModel | null>(null);
+  // Cache models per file to preserve per-file undo/redo and view state across switches
+  const modelCacheRef = useRef<Map<string, { original: monaco.editor.ITextModel; modified: monaco.editor.ITextModel; viewState?: monaco.editor.ICodeEditorViewState | null }>>(new Map());
+  const currentPathRef = useRef<string>(file.path);
   const [isMonacoConfigured, setIsMonacoConfigured] = useState(false);
   const [saveStatus, setSaveStatus] = useState<SaveStatus>('idle');
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -195,13 +198,23 @@ export const MonacoDiffViewer: React.FC<MonacoDiffViewerProps> = ({
         m.editor.setTheme(isDarkMode ? 'vs-dark' : 'vs');
         editorRef.current = editor;
 
-        // Create and set models
+        // Create and set models (use cache to preserve undo when switching files)
         const lang = getLanguage(file.path);
-        const originalModel = m.editor.createModel(file.oldValue || '', lang);
-        const modifiedModel = m.editor.createModel(currentContent, lang);
-        originalModelRef.current = originalModel;
-        modifiedModelRef.current = modifiedModel;
-        editor.setModel({ original: originalModel, modified: modifiedModel });
+        let cache = modelCacheRef.current.get(file.path);
+        if (!cache) {
+          const originalModel = m.editor.createModel(file.oldValue || '', lang);
+          const modifiedModel = m.editor.createModel(currentContent, lang);
+          cache = { original: originalModel, modified: modifiedModel, viewState: null };
+          modelCacheRef.current.set(file.path, cache);
+        } else {
+          // Ensure language matches
+          try { if (cache.original.getLanguageId() !== lang) m.editor.setModelLanguage(cache.original, lang); } catch {}
+          try { if (cache.modified.getLanguageId() !== lang) m.editor.setModelLanguage(cache.modified, lang); } catch {}
+        }
+        originalModelRef.current = cache.original;
+        modifiedModelRef.current = cache.modified;
+        currentPathRef.current = file.path;
+        editor.setModel({ original: cache.original, modified: cache.modified });
 
         // Change events and save shortcut
         const disposables: IDisposable[] = [];
@@ -261,7 +274,7 @@ export const MonacoDiffViewer: React.FC<MonacoDiffViewerProps> = ({
     return () => { disposed = true; };
   }, [canMountEditor, isEditorReady, isReadOnly, viewType, isDarkMode]);
 
-  // Update content/language/theme/options when props change
+  // Update theme/options and handle file switching without resetting undo history
   useEffect(() => {
     const m = monacoRef.current;
     const editor = editorRef.current;
@@ -275,44 +288,83 @@ export const MonacoDiffViewer: React.FC<MonacoDiffViewerProps> = ({
       padding: { bottom: 100 }
     });
 
-    // Programmatic update of model contents with minimal disruption
-    isProgrammaticUpdateRef.current = true;
-    const lang = getLanguage(file.path);
-    const orig = originalModelRef.current;
-    const mod = modifiedModelRef.current;
-    if (orig && orig.getLanguageId() !== lang) m.editor.setModelLanguage(orig, lang);
-    if (mod && mod.getLanguageId() !== lang) m.editor.setModelLanguage(mod, lang);
+    // Handle file switch: swap models from cache instead of resetting values
+    if (file.path !== currentPathRef.current) {
+      // Save current view state for previous file
+      try {
+        const prevPath = currentPathRef.current;
+        const modifiedEditor = editor.getModifiedEditor();
+        const viewState = modifiedEditor.saveViewState?.() || null;
+        const prevCache = prevPath ? modelCacheRef.current.get(prevPath) : undefined;
+        if (prevCache) prevCache.viewState = viewState || null;
+      } catch {}
 
-    // Only set values when they actually differ to avoid resetting undo stack and scroll
-    const currentOrig = orig?.getValue() ?? '';
-    const desiredOrig = file.oldValue || '';
-    if (orig && currentOrig !== desiredOrig) {
-      orig.setValue(desiredOrig);
-    }
-
-    const currentMod = mod?.getValue() ?? '';
-    const desiredMod = file.newValue || '';
-    if (mod && currentMod !== desiredMod) {
-      // Preserve view state to avoid visible scroll jumps
-      const modifiedEditor = editor.getModifiedEditor();
-      let viewState: monaco.editor.ICodeEditorViewState | null = null;
-      try { viewState = modifiedEditor.saveViewState?.() || null; } catch { viewState = null; }
-      mod.setValue(desiredMod);
-      try { if (viewState) modifiedEditor.restoreViewState?.(viewState); } catch {}
-    }
-
-    // Keep current content for markdown preview only
-    if (isMarkdownFile && viewMode !== 'diff') {
-      setCurrentContent(file.newValue || '');
-    }
-
-    setTimeout(() => {
-      isProgrammaticUpdateRef.current = false;
-      if (!isDisposingRef.current) {
-        calculateEditorHeight();
-        try { editor.layout(); } catch {}
+      // Get or create models for new file
+      const lang = getLanguage(file.path);
+      let nextCache = modelCacheRef.current.get(file.path);
+      if (!nextCache) {
+        const originalModel = m.editor.createModel(file.oldValue || '', lang);
+        const modifiedModel = m.editor.createModel(file.newValue || '', lang);
+        nextCache = { original: originalModel, modified: modifiedModel, viewState: null };
+        modelCacheRef.current.set(file.path, nextCache);
+      } else {
+        try { if (nextCache.original.getLanguageId() !== lang) m.editor.setModelLanguage(nextCache.original, lang); } catch {}
+        try { if (nextCache.modified.getLanguageId() !== lang) m.editor.setModelLanguage(nextCache.modified, lang); } catch {}
       }
-    }, 100);
+
+      // Swap editor models without touching content -> preserves undo stack per file
+      originalModelRef.current = nextCache.original;
+      modifiedModelRef.current = nextCache.modified;
+      currentPathRef.current = file.path;
+      editor.setModel({ original: nextCache.original, modified: nextCache.modified });
+
+      // Restore view state for this file if available
+      try {
+        const modifiedEditor = editor.getModifiedEditor();
+        if (nextCache.viewState) modifiedEditor.restoreViewState?.(nextCache.viewState);
+      } catch {}
+
+      // Update markdown preview content for this file
+      if (isMarkdownFile && viewMode !== 'diff') {
+        try { setCurrentContent(nextCache.modified.getValue()); } catch { setCurrentContent(file.newValue || ''); }
+      }
+    } else {
+      // Same file: update language and values only if necessary (e.g., toggling full/diff)
+      isProgrammaticUpdateRef.current = true;
+      const lang = getLanguage(file.path);
+      const orig = originalModelRef.current;
+      const mod = modifiedModelRef.current;
+      if (orig && orig.getLanguageId() !== lang) m.editor.setModelLanguage(orig, lang);
+      if (mod && mod.getLanguageId() !== lang) m.editor.setModelLanguage(mod, lang);
+
+      const currentOrig = orig?.getValue() ?? '';
+      const desiredOrig = file.oldValue || '';
+      if (orig && currentOrig !== desiredOrig) {
+        orig.setValue(desiredOrig);
+      }
+
+      const currentMod = mod?.getValue() ?? '';
+      const desiredMod = file.newValue || '';
+      if (mod && currentMod !== desiredMod) {
+        const modifiedEditor = editor.getModifiedEditor();
+        let viewState: monaco.editor.ICodeEditorViewState | null = null;
+        try { viewState = modifiedEditor.saveViewState?.() || null; } catch { viewState = null; }
+        mod.setValue(desiredMod);
+        try { if (viewState) modifiedEditor.restoreViewState?.(viewState); } catch {}
+      }
+
+      if (isMarkdownFile && viewMode !== 'diff') {
+        setCurrentContent(file.newValue || '');
+      }
+
+      setTimeout(() => {
+        isProgrammaticUpdateRef.current = false;
+        if (!isDisposingRef.current) {
+          calculateEditorHeight();
+          try { editor.layout(); } catch {}
+        }
+      }, 100);
+    }
   }, [file.path, file.oldValue, file.newValue, isDarkMode, isReadOnly, viewType, isMarkdownFile, viewMode]);
 
   // Get file extension for language detection
@@ -630,9 +682,14 @@ export const MonacoDiffViewer: React.FC<MonacoDiffViewerProps> = ({
         } catch { /* ignore */ }
       }
 
-      // 2) Dispose models
-      try { originalModelRef.current?.dispose(); } catch { /* ignore */ }
-      try { modifiedModelRef.current?.dispose(); } catch { /* ignore */ }
+      // 2) Dispose models (all cached)
+      try {
+        modelCacheRef.current.forEach((cached) => {
+          try { cached.original.dispose(); } catch {}
+          try { cached.modified.dispose(); } catch {}
+        });
+      } catch { /* ignore */ }
+      modelCacheRef.current.clear();
       originalModelRef.current = null;
       modifiedModelRef.current = null;
 

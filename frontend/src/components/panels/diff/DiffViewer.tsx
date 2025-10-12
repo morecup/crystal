@@ -600,7 +600,6 @@ const DiffViewer = memo(forwardRef<DiffViewerHandle, DiffViewerProps>(({ diff, s
               </div>
             ) : (
               <MonacoDiffViewer
-                key={`${currentFile.path}-${currentFileIndex}-${showFullContent ? 'full' : 'diff'}`}
                 file={currentFile}
                 sessionId={sessionId || ''}
                 isDarkMode={isDarkMode}
