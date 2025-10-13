@@ -1,6 +1,6 @@
 import { EventEmitter } from 'events';
-import { watch, FSWatcher } from 'fs';
-import { join, relative } from 'path';
+import { watch, FSWatcher, existsSync } from 'fs';
+import { join, relative, isAbsolute } from 'path';
 import { execSync, ExtendedExecSyncOptions } from '../utils/commandExecutor';
 import type { Logger } from '../utils/logger';
 
@@ -24,7 +24,10 @@ interface WatchedSession {
 export class GitFileWatcher extends EventEmitter {
   private watchedSessions: Map<string, WatchedSession> = new Map();
   private refreshDebounceTimers: Map<string, NodeJS.Timeout> = new Map();
+  private errorCounts: Map<string, number> = new Map();
   private readonly DEBOUNCE_MS = 1500; // 1.5 second debounce for file changes
+  private readonly BASE_BACKOFF_MS = 1000;
+  private readonly MAX_BACKOFF_MS = 30000;
   private readonly IGNORE_PATTERNS = [
     '.git/',
     'node_modules/',
@@ -162,19 +165,30 @@ export class GitFileWatcher extends EventEmitter {
    * Schedule a refresh check for a session
    */
   private scheduleRefreshCheck(sessionId: string): void {
-    // Clear existing timer
+    this.scheduleRefreshCheckWithDelay(sessionId, this.DEBOUNCE_MS);
+  }
+
+  private scheduleRefreshCheckWithDelay(sessionId: string, delayMs: number): void {
     const existingTimer = this.refreshDebounceTimers.get(sessionId);
     if (existingTimer) {
       clearTimeout(existingTimer);
     }
-
-    // Set new timer
     const timer = setTimeout(() => {
       this.refreshDebounceTimers.delete(sessionId);
       this.performRefreshCheck(sessionId);
-    }, this.DEBOUNCE_MS);
-
+    }, delayMs);
     this.refreshDebounceTimers.set(sessionId, timer);
+  }
+
+  private getBackoffDelay(sessionId: string): number {
+    const count = (this.errorCounts.get(sessionId) ?? 0) + 1;
+    this.errorCounts.set(sessionId, count);
+    const delay = Math.min(this.BASE_BACKOFF_MS * Math.pow(2, count - 1), this.MAX_BACKOFF_MS);
+    return delay;
+  }
+
+  private resetBackoff(sessionId: string): void {
+    this.errorCounts.delete(sessionId);
   }
 
   /**
@@ -189,9 +203,15 @@ export class GitFileWatcher extends EventEmitter {
     session.pendingRefresh = false;
 
     try {
-      // Quick check if the index is dirty using git update-index
-      // This is much faster than running full git status
       const needsRefresh = this.checkIfRefreshNeeded(session.worktreePath);
+      if (needsRefresh === undefined) {
+        const delay = this.getBackoffDelay(sessionId);
+        this.logger?.warn(`[GitFileWatcher] Refresh check skipped due to transient git state; retrying in ${delay}ms`);
+        session.pendingRefresh = true;
+        this.scheduleRefreshCheckWithDelay(sessionId, delay);
+        return;
+      }
+      this.resetBackoff(sessionId);
       
       if (needsRefresh) {
         this.logger?.info(`[GitFileWatcher] Session ${sessionId} needs refresh`);
@@ -200,9 +220,10 @@ export class GitFileWatcher extends EventEmitter {
         this.logger?.info(`[GitFileWatcher] Session ${sessionId} no refresh needed`);
       }
     } catch (error) {
-      this.logger?.error(`[GitFileWatcher] Error checking session ${sessionId}:`, error as Error);
-      // On error, emit refresh to be safe
-      this.emit('needs-refresh', sessionId);
+      const delay = this.getBackoffDelay(sessionId);
+      this.logger?.warn(`[GitFileWatcher] Transient error during refresh check for session ${sessionId}; retrying in ${delay}ms`, error as Error);
+      session.pendingRefresh = true;
+      this.scheduleRefreshCheckWithDelay(sessionId, delay);
     }
   }
 
@@ -210,11 +231,42 @@ export class GitFileWatcher extends EventEmitter {
    * Quick check if git status needs refreshing
    * Returns true if there are changes, false if working tree is clean
    */
-  private checkIfRefreshNeeded(worktreePath: string): boolean {
+  private checkIfRefreshNeeded(worktreePath: string): boolean | undefined {
     try {
-      // First, refresh the index to ensure it's up to date
-      // This is very fast and updates git's internal cache
-      execSync('git update-index --refresh --ignore-submodules', { cwd: worktreePath, encoding: 'utf8', silent: true });
+      // Verify we are inside a git worktree
+      try {
+        const inside = execSync('git rev-parse --is-inside-work-tree', { cwd: worktreePath, encoding: 'utf8', silent: true })
+          .toString()
+          .trim();
+        if (inside !== 'true') {
+          return undefined;
+        }
+      } catch {
+        return undefined;
+      }
+
+      // Check for index.lock to avoid interfering with ongoing git ops
+      try {
+        const gitDirRaw = execSync('git rev-parse --git-dir', { cwd: worktreePath, encoding: 'utf8', silent: true })
+          .toString()
+          .trim();
+        const gitDir = isAbsolute(gitDirRaw) ? gitDirRaw : join(worktreePath, gitDirRaw);
+        const lockPath = join(gitDir, 'index.lock');
+        if (existsSync(lockPath)) {
+          return undefined;
+        }
+      } catch {
+        // If we can't resolve git dir, skip and retry later
+        return undefined;
+      }
+
+      // Refresh the index quickly
+      try {
+        execSync('git update-index --refresh --ignore-submodules', { cwd: worktreePath, encoding: 'utf8', silent: true });
+      } catch {
+        // Treat failures here as transient; retry later
+        return undefined;
+      }
 
       // Check for unstaged changes (modified files)
       try {
@@ -244,9 +296,9 @@ export class GitFileWatcher extends EventEmitter {
       // Working tree is clean
       return false;
     } catch (error) {
-      // If any command fails unexpectedly, assume refresh is needed
-      this.logger?.error('[GitFileWatcher] Error in checkIfRefreshNeeded:', error as Error);
-      return true;
+      // Treat unexpected errors as transient
+      this.logger?.warn('[GitFileWatcher] Transient error in checkIfRefreshNeeded; will retry', error as Error);
+      return undefined;
     }
   }
 
