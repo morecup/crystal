@@ -79,6 +79,13 @@ export class VersionChecker {
 
   public async checkOnStartup(): Promise<void> {
     try {
+      // Respect user setting: skip startup check when disabled
+      const config = this.configManager.getConfig();
+      if (config.autoCheckUpdates === false) {
+        this.logger.info('[Version Checker] Startup update check skipped (autoCheckUpdates disabled)');
+        return;
+      }
+
       const versionInfo = await this.checkForUpdates();
       
       if (versionInfo.hasUpdate) {

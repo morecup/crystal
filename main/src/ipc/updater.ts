@@ -6,12 +6,18 @@ import * as path from 'path';
 import { commandExecutor } from '../utils/commandExecutor';
 import { getCurrentWorktreeName } from '../utils/worktreeUtils';
 import { getCrystalDirectory } from '../utils/crystalDirectory';
+import type { VersionInfo } from '../services/versionChecker';
 
 export function registerUpdaterHandlers(ipcMain: IpcMain, { app, versionChecker }: AppServices): void {
   // Version checking handlers
   ipcMain.handle('version:check-for-updates', async () => {
     try {
       const versionInfo = await versionChecker.checkForUpdates();
+      // When manually checking, also emit the update-available event so UI can react
+      if (versionInfo.hasUpdate) {
+        (process as NodeJS.Process & { emit(event: 'version-update-available', data: VersionInfo): boolean })
+          .emit('version-update-available', versionInfo);
+      }
       return { success: true, data: versionInfo };
     } catch (error) {
       console.error('Failed to check for updates:', error);
