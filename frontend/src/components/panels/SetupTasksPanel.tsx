@@ -5,6 +5,7 @@ import { panelApi } from '../../services/panelApi';
 import { API } from '../../utils/api';
 import type { SetupTasksPanelState } from '../../../../shared/types/panels';
 import { CreateSessionDialog } from '../CreateSessionDialog';
+import { ConfirmDialog } from '../ConfirmDialog';
 
 interface SetupTask {
   id: string;
@@ -28,6 +29,7 @@ const SetupTasksPanel: React.FC<SetupTasksPanelProps> = ({ panelId, isActive }) 
   const [isChecking, setIsChecking] = useState(false);
   const [expandedTask, setExpandedTask] = useState<string | null>(null);
   const [showSessionDialog, setShowSessionDialog] = useState(false);
+  const [showGitignoreConfirm, setShowGitignoreConfirm] = useState(false);
 
   // Get project info from session context
   const projectId = sessionContext?.projectId;
@@ -104,25 +106,10 @@ const SetupTasksPanel: React.FC<SetupTasksPanelProps> = ({ panelId, isActive }) 
   }, [projectId]);
 
   // Add worktrees to .gitignore
-  const addToGitignore = useCallback(async () => {
+  const performAddToGitignore = useCallback(async () => {
     if (!projectId) return;
     
     console.log('[SetupTasksPanel] Starting addToGitignore for project:', projectId);
-    
-    // Show confirmation dialog
-    const confirmed = window.confirm(
-      'Crystal will add worktree patterns to .gitignore and create a new commit.\n\n' +
-      'This will:\n' +
-      '• Add /.worktrees/ and /.worktree-*/ patterns to .gitignore\n' +
-      '• Create a commit with only these changes\n' +
-      '• Leave any other uncommitted changes untouched\n\n' +
-      'Proceed?'
-    );
-    
-    if (!confirmed) {
-      console.log('[SetupTasksPanel] User cancelled .gitignore update');
-      return;
-    }
     
     try {
       // Read current .gitignore or create empty if doesn't exist
@@ -243,6 +230,10 @@ const SetupTasksPanel: React.FC<SetupTasksPanelProps> = ({ panelId, isActive }) 
     }
   }, [projectId]);
 
+  const addToGitignore = useCallback(() => {
+    setShowGitignoreConfirm(true);
+  }, []);
+
   // Check all tasks
   const checkAllTasks = useCallback(async () => {
     if (!isActive || !projectId) return;
@@ -285,9 +276,8 @@ const SetupTasksPanel: React.FC<SetupTasksPanelProps> = ({ panelId, isActive }) 
 
   // Update addToGitignore to use checkAllTasks after it's defined
   const addToGitignoreWithRefresh = useCallback(async () => {
-    await addToGitignore();
-    await checkAllTasks();
-  }, [addToGitignore, checkAllTasks]);
+    addToGitignore();
+  }, [addToGitignore]);
 
   // Define setup tasks
   const setupTasks: SetupTask[] = [
@@ -464,6 +454,17 @@ const SetupTasksPanel: React.FC<SetupTasksPanelProps> = ({ panelId, isActive }) 
         projectName={sessionContext?.projectName}
         initialPrompt="Create a new file crystal-run.sh that launches this project. Before launching, the script should safely kill any other running instances of the project."
         initialSessionName="build-run-script"
+      />
+
+      <ConfirmDialog
+        isOpen={showGitignoreConfirm}
+        onClose={() => setShowGitignoreConfirm(false)}
+        onConfirm={() => { setShowGitignoreConfirm(false); void performAddToGitignore(); }}
+        title="Update .gitignore for Worktrees"
+        message={'Crystal will add worktree patterns to .gitignore and create a new commit.\n\nThis will:\n• Add /.worktrees/ and /.worktree-*/ patterns to .gitignore\n• Create a commit with only these changes\n• Leave any other uncommitted changes untouched\n\nProceed?'}
+        confirmText="Proceed"
+        cancelText="Cancel"
+        confirmButtonClass="bg-interactive hover:bg-interactive/90 text-white"
       />
     </div>
   );

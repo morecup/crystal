@@ -1,7 +1,8 @@
-import React, { memo } from 'react';
+import React, { memo, useState } from 'react';
 import { FileText, FileCode, FileImage, File, Trash2, RotateCcw } from 'lucide-react';
 import { IconButton } from './ui/IconButton';
 import { cn } from '../utils/cn';
+import { ConfirmDialog } from './ConfirmDialog';
 
 interface FileInfo {
   path: string;
@@ -74,6 +75,10 @@ const getTypeLabel = (type: FileInfo['type']) => {
 };
 
 export const FileList: React.FC<FileListProps> = memo(({ files, onFileClick, onFileDelete, onFileRestore, selectedFile }) => {
+  const [confirmState, setConfirmState] = useState<
+    { open: true; type: 'restore' | 'delete'; path: string; message: string }
+    | { open: false; type?: undefined; path?: undefined; message?: undefined }
+  >({ open: false });
   if (files.length === 0) {
     return (
       <div className="p-4 text-center text-text-tertiary text-sm">
@@ -133,9 +138,7 @@ export const FileList: React.FC<FileListProps> = memo(({ files, onFileClick, onF
                         : file.type === 'deleted'
                           ? 'This will restore the deleted file from HEAD'
                           : 'This will discard local modifications';
-                      if (window.confirm(`Rollback changes to ${file.path}?\n\n${action}.`)) {
-                        onFileRestore(file.path);
-                      }
+                      setConfirmState({ open: true, type: 'restore', path: file.path, message: `Rollback changes to ${file.path}?\n\n${action}.` });
                     }}
                     variant="ghost"
                     size="sm"
@@ -149,8 +152,8 @@ export const FileList: React.FC<FileListProps> = memo(({ files, onFileClick, onF
                   <IconButton
                     onClick={(e) => {
                       e.stopPropagation();
-                      if (file.type !== 'deleted' && window.confirm(`Are you sure you want to delete ${file.path}?`)) {
-                        onFileDelete(file.path);
+                      if (file.type !== 'deleted') {
+                        setConfirmState({ open: true, type: 'delete', path: file.path, message: `Are you sure you want to delete ${file.path}?` });
                       }
                     }}
                     disabled={file.type === 'deleted'}
@@ -170,6 +173,25 @@ export const FileList: React.FC<FileListProps> = memo(({ files, onFileClick, onF
           ))}
         </div>
       </div>
+
+      <ConfirmDialog
+        isOpen={confirmState.open}
+        onClose={() => setConfirmState({ open: false })}
+        onConfirm={() => {
+          if (!confirmState.open) return;
+          if (confirmState.type === 'restore' && onFileRestore && confirmState.path) {
+            onFileRestore(confirmState.path);
+          } else if (confirmState.type === 'delete' && onFileDelete && confirmState.path) {
+            onFileDelete(confirmState.path);
+          }
+          setConfirmState({ open: false });
+        }}
+        title={confirmState.type === 'delete' ? 'Delete File' : 'Rollback File'}
+        message={confirmState.message || ''}
+        confirmText={confirmState.type === 'delete' ? 'Delete' : 'Rollback'}
+        cancelText="Cancel"
+        confirmButtonClass={confirmState.type === 'delete' ? 'bg-red-600 hover:bg-red-700 text-white' : 'bg-yellow-600 hover:bg-yellow-700 text-white'}
+      />
     </div>
   );
 });

@@ -9,6 +9,7 @@ import type { ExecutionDiff, GitDiffResult } from '../../../types/diff';
 import { Maximize2, Minimize2, RefreshCw, Settings as SettingsIcon } from 'lucide-react';
 import DiffSettings from './DiffSettings';
 import DeleteLastCommitDialog from '../../DeleteLastCommitDialog';
+import { ConfirmDialog } from '../../ConfirmDialog';
 import { parseFilesFromDiff, validateParsedFiles } from '../../../utils/diffParser';
 
 const HISTORY_LIMIT = 50;
@@ -287,26 +288,15 @@ const CombinedDiffView: React.FC<CombinedDiffViewProps> = memo(({
     refresh();
   }, [showCommitDialog, sessionId]);
 
-  const handleRevert = useCallback(async (commitHash: string) => {
-    if (!window.confirm(`Are you sure you want to revert commit ${commitHash.substring(0, 7)}? This will create a new commit that undoes the changes.`)) {
-      return;
-    }
+  const [revertConfirm, setRevertConfirm] = useState<{ open: boolean; hash?: string }>({ open: false });
 
+  const performRevert = useCallback(async (hash: string) => {
     try {
-      const result = await window.electronAPI.invoke('git:revert', {
-        sessionId,
-        commitHash
-      });
-      
-      if (!result.success) {
-        throw new Error(result.error || 'Failed to revert commit');
-      }
-      
-      // Reload executions to reflect the new revert commit
+      const result = await window.electronAPI.invoke('git:revert', { sessionId, commitHash: hash });
+      if (!result.success) throw new Error(result.error || 'Failed to revert commit');
       const response = await API.sessions.getExecutions(sessionId);
       if (response.success) {
         setExecutions(response.data);
-        // Clear selection to show the new revert commit
         setSelectedExecutions([]);
       }
     } catch (err) {
@@ -314,6 +304,10 @@ const CombinedDiffView: React.FC<CombinedDiffViewProps> = memo(({
       alert(`Failed to revert commit: ${err instanceof Error ? err.message : 'Unknown error'}`);
     }
   }, [sessionId]);
+
+  const handleRevert = useCallback((commitHash: string) => {
+    setRevertConfirm({ open: true, hash: commitHash });
+  }, []);
 
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   const [latestCommitInfo, setLatestCommitInfo] = useState<{ hash?: string; message?: string }>({});
@@ -558,45 +552,28 @@ const CombinedDiffView: React.FC<CombinedDiffViewProps> = memo(({
     }
   }, [sessionId, selectedExecutions, executions.length]);
 
-  const handleRestore = useCallback(async () => {
-    if (!window.confirm('Are you sure you want to restore all uncommitted changes? This will discard all your local modifications.')) {
-      return;
-    }
+  const [restoreAllConfirmOpen, setRestoreAllConfirmOpen] = useState(false);
 
+  const performRestoreAll = useCallback(async () => {
     try {
-      const result = await window.electronAPI.invoke('git:restore', {
-        sessionId
-      });
-      
-      if (!result.success) {
-        throw new Error(result.error || 'Failed to restore changes');
-      }
-      
-      // 还原完成后，依赖 Git 状态刷新，无需维护本地 modifiedFiles 集
-      
-      // Reload executions and diff
+      const result = await window.electronAPI.invoke('git:restore', { sessionId });
+      if (!result.success) throw new Error(result.error || 'Failed to restore changes');
       const response = await API.sessions.getExecutions(sessionId);
-      if (response.success) {
-        setExecutions(response.data);
-      }
-      
-      // Reload the uncommitted changes diff if selected
+      if (response.success) setExecutions(response.data);
       if (selectedExecutions.includes(0)) {
         const diffResponse = await API.sessions.getCombinedDiff(sessionId, [0]);
-        if (diffResponse.success) {
-          setCombinedDiff(diffResponse.data);
-        }
+        if (diffResponse.success) setCombinedDiff(diffResponse.data);
       }
-
-      // 通知 Editor panel 文件已被restore，需要重新加载
-      window.dispatchEvent(new CustomEvent('git-restore-completed', {
-        detail: { sessionId }
-      }));
+      window.dispatchEvent(new CustomEvent('git-restore-completed', { detail: { sessionId } }));
     } catch (err) {
       console.error('Error restoring changes:', err);
       alert(`Failed to restore changes: ${err instanceof Error ? err.message : 'Unknown error'}`);
     }
   }, [sessionId, selectedExecutions]);
+
+  const handleRestore = useCallback(() => {
+    setRestoreAllConfirmOpen(true);
+  }, []);
 
   if (loading && executions.length === 0) {
     return (
@@ -815,6 +792,32 @@ const CombinedDiffView: React.FC<CombinedDiffViewProps> = memo(({
         onCommit={handleCommit}
         // 使用 Git 实际未提交变更文件数量，避免一直显示为 0
         fileCount={uncommittedFileCount}
+      />
+
+      {/* Revert Commit Confirmation */}
+      <ConfirmDialog
+        isOpen={revertConfirm.open}
+        onClose={() => setRevertConfirm({ open: false, hash: undefined })}
+        onConfirm={() => {
+          if (revertConfirm.hash) performRevert(revertConfirm.hash);
+        }}
+        title="Revert Commit"
+        message={`Revert commit ${revertConfirm.hash ? revertConfirm.hash.substring(0, 7) : ''}? This will create a new commit that undoes the changes.`}
+        confirmText="Revert"
+        cancelText="Cancel"
+        confirmButtonClass="bg-red-600 hover:bg-red-700 text-white"
+      />
+
+      {/* Restore All Uncommitted Changes Confirmation */}
+      <ConfirmDialog
+        isOpen={restoreAllConfirmOpen}
+        onClose={() => setRestoreAllConfirmOpen(false)}
+        onConfirm={() => { setRestoreAllConfirmOpen(false); performRestoreAll(); }}
+        title="Restore All Uncommitted Changes"
+        message={'This will discard ALL local modifications and untracked files in this worktree.\n\nProceed?'}
+        confirmText="Restore"
+        cancelText="Cancel"
+        confirmButtonClass="bg-yellow-600 hover:bg-yellow-700 text-white"
       />
 
       {/* Diff Settings */}

@@ -41,3 +41,5 @@
 - Always review the root `CLAUDE.md` before beginning any work. 
 - Scan the repository for every `CLAUDE.md`, and when working in a folder or any of its subfolders that has one, read and follow that file too.
 - 我们之间使用中文交流和生成文档。git提交信息也需要使用中文。
+
+- 前端禁止使用 `window.confirm`/`window.alert` 等阻塞式原生对话框；统一使用应用内的非阻塞 `ConfirmDialog`（`frontend/src/components/ConfirmDialog.tsx`）或 `Modal` 组件。原因：在 Electron/Chromium 下阻塞对话框会导致键盘修饰键状态丢失，引发输入框短时间（约 30–40 秒）无法输入的问题。涉及操作（如 Diff 面板的 Revert/Restore、文件回滚/删除、项目设置确认等）一律使用 `ConfirmDialog`。

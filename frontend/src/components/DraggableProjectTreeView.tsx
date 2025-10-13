@@ -21,6 +21,7 @@ import { EnhancedInput } from './ui/EnhancedInput';
 import { FieldWithTooltip } from './ui/FieldWithTooltip';
 import { Card } from './ui/Card';
 import { getCodexModelConfig } from '../../../shared/types/models';
+import { ConfirmDialog } from './ConfirmDialog';
 
 interface ProjectWithSessions extends Project {
   sessions: Session[];
@@ -71,6 +72,7 @@ export function DraggableProjectTreeView() {
   const [selectedProjectForFolder, setSelectedProjectForFolder] = useState<Project | null>(null);
   const [newFolderName, setNewFolderName] = useState('');
   const [parentFolderForCreate, setParentFolderForCreate] = useState<Folder | null>(null);
+  const [deleteFolderConfirm, setDeleteFolderConfirm] = useState<{ open: boolean; folder?: Folder; projectId?: number; message?: string }>({ open: false });
   const { showError } = useErrorStore();
   const { menuState, openMenu, closeMenu, isMenuOpen } = useContextMenu();
   
@@ -744,21 +746,14 @@ export function DraggableProjectTreeView() {
     }, 300),
     [archivedProjectsWithSessions.length, isLoadingArchived]
   );
-  const handleDeleteFolder = async (folder: Folder, projectId: number) => {
+  const performDeleteFolder = async (folder: Folder, projectId: number) => {
     // Check if folder has sessions
     const project = projectsWithSessions.find(p => p.id === projectId);
     if (!project) return;
     
     const folderSessions = project.sessions.filter(s => s.folderId === folder.id);
     
-    // Show confirmation dialog
-    const message = folderSessions.length > 0
-      ? `Delete folder "${folder.name}" and permanently delete ${folderSessions.length} session${folderSessions.length > 1 ? 's' : ''} inside it? This action cannot be undone.`
-      : `Delete empty folder "${folder.name}"?`;
-    
-    const confirmed = window.confirm(message);
-    
-    if (confirmed) {
+    {
       try {
         // First, delete all sessions in the folder
         if (folderSessions.length > 0) {
@@ -844,6 +839,15 @@ export function DraggableProjectTreeView() {
         useSessionStore.getState().clearDeletingSessionIds();
       }
     }
+  };
+
+  const handleDeleteFolder = (folder: Folder, projectId: number) => {
+    const project = projectsWithSessions.find(p => p.id === projectId);
+    const folderSessions = project ? project.sessions.filter(s => s.folderId === folder.id) : [];
+    const message = folderSessions.length > 0
+      ? `Delete folder "${folder.name}" and permanently delete ${folderSessions.length} session${folderSessions.length > 1 ? 's' : ''} inside it? This action cannot be undone.`
+      : `Delete empty folder "${folder.name}"?`;
+    setDeleteFolderConfirm({ open: true, folder, projectId, message });
   };
 
   const handleProjectClick = async (project: Project) => {
@@ -2385,6 +2389,21 @@ export function DraggableProjectTreeView() {
           </button>
         </div>
       )}
+      <ConfirmDialog
+        isOpen={deleteFolderConfirm.open}
+        onClose={() => setDeleteFolderConfirm({ open: false })}
+        onConfirm={() => {
+          if (deleteFolderConfirm.folder && typeof deleteFolderConfirm.projectId === 'number') {
+            void performDeleteFolder(deleteFolderConfirm.folder, deleteFolderConfirm.projectId);
+          }
+          setDeleteFolderConfirm({ open: false });
+        }}
+        title="Delete Folder"
+        message={deleteFolderConfirm.message || ''}
+        confirmText="Delete"
+        cancelText="Cancel"
+        confirmButtonClass="bg-red-600 hover:bg-red-700 text-white"
+      />
     </>
   );
 }
