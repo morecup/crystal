@@ -174,6 +174,13 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = React.memo(({ panel, 
             fitAddon.fit();
             const dimensions = fitAddon.proposeDimensions();
             if (dimensions && dimensions.cols > 0 && dimensions.rows > 0) {
+              // When triggered via the panel "Refresh" menu, force a real PTY size change first
+              // to guarantee SIGWINCH delivery (some PTYs ignore no-op resizes).
+              // We detect refresh-driven remounts by a positive renderNonce.
+              const renderNonce = (panel.state as any)?.renderNonce ?? 0;
+              if (panel.type === 'tmux' && renderNonce > 0 && dimensions.rows > 1) {
+                window.electronAPI.invoke('terminal:resize', panel.id, dimensions.cols, dimensions.rows - 1);
+              }
               window.electronAPI.invoke('terminal:resize', panel.id, dimensions.cols, dimensions.rows);
               console.log('[TerminalPanel] FitAddon fitted with', dimensions.cols, 'x', dimensions.rows);
             }
