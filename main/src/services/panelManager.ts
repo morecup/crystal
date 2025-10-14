@@ -336,13 +336,27 @@ export class PanelManager {
   private generatePanelTitle(sessionId: string, type: string): string {
     const existingPanels = this.getPanelsForSession(sessionId);
     const samePType = existingPanels.filter(p => p.type === type);
-    const nextNumber = samePType.length + 1;
-    
+
+    // Extract existing numbers from titles (e.g., "Terminal 2" -> 2)
+    const usedNumbers = new Set<number>();
+    samePType.forEach(p => {
+      const match = p.title.match(/\d+$/);
+      if (match) {
+        usedNumbers.add(parseInt(match[0], 10));
+      }
+    });
+
+    // Find first unused number starting from 1
+    let nextNumber = 1;
+    while (usedNumbers.has(nextNumber)) {
+      nextNumber++;
+    }
+
     // Capitalize first letter of type
     const capitalizedType = type === 'wsl'
       ? 'WSL'
       : type.charAt(0).toUpperCase() + type.slice(1);
-    
+
     return `${capitalizedType} ${nextNumber}`;
   }
   
