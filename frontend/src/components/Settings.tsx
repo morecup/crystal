@@ -36,7 +36,7 @@ export function Settings({ isOpen, onClose }: SettingsProps) {
   const [globalSystemPrompt, setGlobalSystemPrompt] = useState('');
   const [claudeExecutablePath, setClaudeExecutablePath] = useState('');
   const [defaultPermissionMode, setDefaultPermissionMode] = useState<'approve' | 'ignore'>('ignore');
-  const [autoCheckUpdates, setAutoCheckUpdates] = useState(true);
+  const [autoCheckUpdates, setAutoCheckUpdates] = useState(false);
   const [ignoreMonacoInitErrors, setIgnoreMonacoInitErrors] = useState(true);
   const [devMode, setDevMode] = useState(false);
   const [additionalPathsText, setAdditionalPathsText] = useState('');
@@ -75,7 +75,7 @@ export function Settings({ isOpen, onClose }: SettingsProps) {
       setGlobalSystemPrompt(data.systemPromptAppend || '');
       setClaudeExecutablePath(data.claudeExecutablePath || '');
       setDefaultPermissionMode(data.defaultPermissionMode || 'ignore');
-      setAutoCheckUpdates(data.autoCheckUpdates !== false); // Default to true
+      setAutoCheckUpdates(data.autoCheckUpdates === true); // Default to false
       // 默认勾选：当后端未返回该字段或为 true 时均视为勾选，仅当显式 false 才取消
       setIgnoreMonacoInitErrors(data.ignoreMonacoInitErrors !== false);
       setDevMode(data.devMode || false);
