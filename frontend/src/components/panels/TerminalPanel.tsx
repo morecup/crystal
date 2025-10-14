@@ -210,6 +210,18 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = React.memo(({ panel, 
 
             if (restoredContent) {
               terminal.write(restoredContent);
+
+              // 强制重新计算布局，防止历史记录导致的渲染错位
+              // 使用 setTimeout 确保 write 操作完成后再 fit
+              setTimeout(() => {
+                if (fitAddon && !disposed) {
+                  fitAddon.fit();
+                  const dimensions = fitAddon.proposeDimensions();
+                  if (dimensions && dimensions.cols > 0 && dimensions.rows > 0) {
+                    window.electronAPI.invoke('terminal:resize', panel.id, dimensions.cols, dimensions.rows);
+                  }
+                }
+              }, 0);
             }
           }
 
