@@ -265,7 +265,7 @@ export const SessionListItem = memo(function SessionListItem({ session, isNested
     } finally {
       removeDeletingSessionId(session.id);
     }
-  }, [isDeleting, session.name, session.id, session.isMainRepo, session.worktreePath, isActive, addDeletingSessionId, removeDeletingSessionId, setActiveSession]);
+  }, [isDeleting, session.name, session.id, session.isMainRepo, session.worktreePath, isActive, deleteLocalBranch, deleteRemoteBranch, addDeletingSessionId, removeDeletingSessionId, setActiveSession]);
 
   const handleSaveEdit = async () => {
     if (editName.trim() === '') {
@@ -356,7 +356,7 @@ export const SessionListItem = memo(function SessionListItem({ session, isNested
       removeDeletingSessionId(session.id);
       setShowPermanentDeleteConfirm(false);
     }
-  }, [session.id, isActive, addDeletingSessionId, removeDeletingSessionId, setActiveSession]);
+  }, [session.id, session.archived, isActive, deleteLocalBranch, deleteRemoteBranch, addDeletingSessionId, removeDeletingSessionId, setActiveSession]);
 
   const handleToggleFavorite = async (e: React.MouseEvent) => {
     e.stopPropagation();
